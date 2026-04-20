@@ -1,19 +1,19 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 
-import { buildApp } from '../../src/server.js';
+import { buildTestApp } from '../helpers.js';
+
+let app: FastifyInstance;
+
+beforeAll(async () => {
+  app = await buildTestApp();
+});
+
+afterAll(async () => {
+  await app.close();
+});
 
 describe('GET /health', () => {
-  let app: FastifyInstance;
-
-  beforeAll(async () => {
-    app = await buildApp();
-  });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
   it('returns 200 status code', async () => {
     const response = await app.inject({
       method: 'GET',

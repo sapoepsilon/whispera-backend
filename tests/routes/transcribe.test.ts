@@ -1,59 +1,25 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 
-import { buildApp } from '../../src/server.js';
-
-const testUser = {
-  email: 'transcribe-test@example.com',
-  password: 'ValidPass1',
-  name: 'Transcribe Test User',
-};
+import {
+  buildTestApp,
+  registerAndGetToken,
+  authHeader,
+  createAudioPayload,
+} from '../helpers.js';
 
 let app: FastifyInstance;
 let accessToken: string;
 
 beforeAll(async () => {
-  app = await buildApp();
-
-  const res = await app.inject({
-    method: 'POST',
-    url: '/auth/register',
-    payload: testUser,
-  });
-  accessToken = res.json().accessToken;
+  app = await buildTestApp();
+  const result = await registerAndGetToken(app);
+  accessToken = result.accessToken;
 });
 
 afterAll(async () => {
   await app.close();
 });
-
-function authHeader() {
-  return { authorization: `Bearer ${accessToken}` };
-}
-
-function createAudioPayload(
-  filename: string,
-  mimetype: string,
-  content: Buffer = Buffer.from('fake-audio-data'),
-) {
-  const boundary = '----FormBoundary' + Date.now();
-  const body = Buffer.concat([
-    Buffer.from(
-      `--${boundary}\r\n` +
-        `Content-Disposition: form-data; name="audio"; filename="${filename}"\r\n` +
-        `Content-Type: ${mimetype}\r\n\r\n`,
-    ),
-    content,
-    Buffer.from(`\r\n--${boundary}--\r\n`),
-  ]);
-
-  return {
-    body,
-    contentType: `multipart/form-data; boundary=${boundary}`,
-  };
-}
 
 describe('POST /transcribe', () => {
   it('returns 200 with transcription result for valid audio', async () => {
@@ -63,7 +29,7 @@ describe('POST /transcribe', () => {
       method: 'POST',
       url: '/transcribe',
       headers: {
-        ...authHeader(),
+        ...authHeader(accessToken),
         'content-type': contentType,
       },
       payload: body,
@@ -83,7 +49,7 @@ describe('POST /transcribe', () => {
       method: 'POST',
       url: '/transcribe',
       headers: {
-        ...authHeader(),
+        ...authHeader(accessToken),
         'content-type': contentType,
       },
       payload: body,
@@ -100,7 +66,7 @@ describe('POST /transcribe', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/transcribe',
-      headers: authHeader(),
+      headers: authHeader(accessToken),
     });
 
     expect(res.statusCode).toBe(400);
@@ -113,7 +79,7 @@ describe('POST /transcribe', () => {
       method: 'POST',
       url: '/transcribe',
       headers: {
-        ...authHeader(),
+        ...authHeader(accessToken),
         'content-type': contentType,
       },
       payload: body,
@@ -136,52 +102,18 @@ describe('POST /transcribe', () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it('accepts wav format', async () => {
-    const { body, contentType } = createAudioPayload('test.wav', 'audio/wav');
+  it.each([
+    ['wav', 'test.wav', 'audio/wav'],
+    ['mp3', 'test.mp3', 'audio/mpeg'],
+    ['m4a', 'test.m4a', 'audio/x-m4a'],
+    ['webm', 'test.webm', 'audio/webm'],
+  ])('accepts %s format', async (_label, filename, mimetype) => {
+    const { body, contentType } = createAudioPayload(filename, mimetype);
 
     const res = await app.inject({
       method: 'POST',
       url: '/transcribe',
-      headers: { ...authHeader(), 'content-type': contentType },
-      payload: body,
-    });
-
-    expect(res.statusCode).toBe(200);
-  });
-
-  it('accepts mp3 format', async () => {
-    const { body, contentType } = createAudioPayload('test.mp3', 'audio/mpeg');
-
-    const res = await app.inject({
-      method: 'POST',
-      url: '/transcribe',
-      headers: { ...authHeader(), 'content-type': contentType },
-      payload: body,
-    });
-
-    expect(res.statusCode).toBe(200);
-  });
-
-  it('accepts m4a format', async () => {
-    const { body, contentType } = createAudioPayload('test.m4a', 'audio/x-m4a');
-
-    const res = await app.inject({
-      method: 'POST',
-      url: '/transcribe',
-      headers: { ...authHeader(), 'content-type': contentType },
-      payload: body,
-    });
-
-    expect(res.statusCode).toBe(200);
-  });
-
-  it('accepts webm format', async () => {
-    const { body, contentType } = createAudioPayload('test.webm', 'audio/webm');
-
-    const res = await app.inject({
-      method: 'POST',
-      url: '/transcribe',
-      headers: { ...authHeader(), 'content-type': contentType },
+      headers: { ...authHeader(accessToken), 'content-type': contentType },
       payload: body,
     });
 
@@ -189,28 +121,19 @@ describe('POST /transcribe', () => {
   });
 
   it('accepts optional language parameter', async () => {
-    const boundary = '----FormBoundary' + Date.now();
-    const body = Buffer.concat([
-      Buffer.from(
-        `--${boundary}\r\n` +
-          `Content-Disposition: form-data; name="audio"; filename="test.wav"\r\n` +
-          `Content-Type: audio/wav\r\n\r\n`,
-      ),
+    const { body, contentType } = createAudioPayload(
+      'test.wav',
+      'audio/wav',
       Buffer.from('fake-audio'),
-      Buffer.from(
-        `\r\n--${boundary}\r\n` +
-          `Content-Disposition: form-data; name="language"\r\n\r\n` +
-          `en`,
-      ),
-      Buffer.from(`\r\n--${boundary}--\r\n`),
-    ]);
+      { language: 'en' },
+    );
 
     const res = await app.inject({
       method: 'POST',
       url: '/transcribe',
       headers: {
-        ...authHeader(),
-        'content-type': `multipart/form-data; boundary=${boundary}`,
+        ...authHeader(accessToken),
+        'content-type': contentType,
       },
       payload: body,
     });
@@ -224,7 +147,7 @@ describe('POST /transcribe', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/transcribe',
-      headers: { ...authHeader(), 'content-type': contentType },
+      headers: { ...authHeader(accessToken), 'content-type': contentType },
       payload: body,
     });
 

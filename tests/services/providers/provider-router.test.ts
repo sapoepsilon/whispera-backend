@@ -101,36 +101,15 @@ describe('BaseProvider (via concrete implementations)', () => {
   });
 
   describe('normalizeFinishReason', () => {
-    it('maps Claude "end_turn" to "stop"', () => {
-      const provider = new ClaudeProvider({ apiKey: 'sk-test' });
-
-      expect(provider.normalizeFinishReason('end_turn')).toBe('stop');
-    });
-
-    it('maps Claude "max_tokens" to "length"', () => {
-      const provider = new ClaudeProvider({ apiKey: 'sk-test' });
-
-      expect(provider.normalizeFinishReason('max_tokens')).toBe('length');
-    });
-
-    it('maps OpenAI "stop" to "stop"', () => {
-      const provider = new OpenAIProvider({ apiKey: 'sk-test' });
-
-      expect(provider.normalizeFinishReason('stop')).toBe('stop');
-    });
-
-    it('maps OpenAI "length" to "length"', () => {
-      const provider = new OpenAIProvider({ apiKey: 'sk-test' });
-
-      expect(provider.normalizeFinishReason('length')).toBe('length');
-    });
-
-    it('maps unknown reasons to "unknown"', () => {
-      const provider = new ClaudeProvider({ apiKey: 'sk-test' });
-
-      expect(provider.normalizeFinishReason('something_unexpected')).toBe(
-        'unknown',
-      );
+    it.each([
+      { label: 'Claude', Provider: ClaudeProvider, input: 'end_turn', expected: 'stop' },
+      { label: 'Claude', Provider: ClaudeProvider, input: 'max_tokens', expected: 'length' },
+      { label: 'OpenAI', Provider: OpenAIProvider, input: 'stop', expected: 'stop' },
+      { label: 'OpenAI', Provider: OpenAIProvider, input: 'length', expected: 'length' },
+      { label: 'Claude', Provider: ClaudeProvider, input: 'something_unexpected', expected: 'unknown' },
+    ])('$label maps "$input" to "$expected"', ({ Provider, input, expected }) => {
+      const provider = new Provider({ apiKey: 'sk-test' });
+      expect(provider.normalizeFinishReason(input)).toBe(expected);
     });
   });
 });

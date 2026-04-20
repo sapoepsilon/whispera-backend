@@ -1,36 +1,31 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 
-import { buildApp } from '../../src/server.js';
+import {
+  buildTestApp,
+  registerUser,
+  registerAndGetToken,
+  authHeader,
+  DEFAULT_PASSWORD,
+} from '../helpers.js';
 
 const testUser = {
   email: 'test@example.com',
-  password: 'ValidPass1',
+  password: DEFAULT_PASSWORD,
   name: 'Test User',
 };
 
-async function registerUser(
-  app: FastifyInstance,
-  data: { email: string; password: string; name: string },
-) {
-  return app.inject({
-    method: 'POST',
-    url: '/auth/register',
-    payload: data,
-  });
-}
+let app: FastifyInstance;
+
+beforeAll(async () => {
+  app = await buildTestApp();
+});
+
+afterAll(async () => {
+  await app.close();
+});
 
 describe('POST /auth/register', () => {
-  let app: FastifyInstance;
-
-  beforeAll(async () => {
-    app = await buildApp();
-  });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
   it('returns 201 with accessToken and refreshToken for valid input', async () => {
     const response = await registerUser(app, testUser);
 
@@ -43,7 +38,6 @@ describe('POST /auth/register', () => {
 
   it('accessToken is a valid JWT string', async () => {
     const response = await registerUser(app, {
-      ...testUser,
       email: 'jwt-check@example.com',
     });
 
@@ -54,7 +48,6 @@ describe('POST /auth/register', () => {
 
   it('refreshToken is a 64-char hex string', async () => {
     const response = await registerUser(app, {
-      ...testUser,
       email: 'refresh-check@example.com',
     });
 
@@ -72,70 +65,30 @@ describe('POST /auth/register', () => {
     expect(response.statusCode).toBe(400);
   });
 
-  it('returns 400 for password shorter than 8 chars', async () => {
-    const response = await registerUser(app, {
-      ...testUser,
-      email: 'short-pw@example.com',
-      password: 'short1A',
-    });
-
-    expect(response.statusCode).toBe(400);
-  });
-
-  it('returns 400 for password without uppercase', async () => {
-    const response = await registerUser(app, {
-      ...testUser,
-      email: 'no-upper@example.com',
-      password: 'alllowercase1',
-    });
-
-    expect(response.statusCode).toBe(400);
-  });
-
-  it('returns 400 for password without number', async () => {
-    const response = await registerUser(app, {
-      ...testUser,
-      email: 'no-number@example.com',
-      password: 'NoNumbersHere',
-    });
-
+  it.each([
+    ['shorter than 8 chars', 'short-pw@example.com', 'short1A'],
+    ['without uppercase', 'no-upper@example.com', 'alllowercase1'],
+    ['without number', 'no-number@example.com', 'NoNumbersHere'],
+  ])('returns 400 for password %s', async (_label, email, password) => {
+    const response = await registerUser(app, { email, password });
     expect(response.statusCode).toBe(400);
   });
 
   it('returns 400 for invalid email format', async () => {
-    const response = await registerUser(app, {
-      ...testUser,
-      email: 'not-an-email',
-    });
-
+    const response = await registerUser(app, { email: 'not-an-email' });
     expect(response.statusCode).toBe(400);
   });
 
   it('returns 409 when registering with an already-used email', async () => {
-    await registerUser(app, {
-      ...testUser,
-      email: 'duplicate@example.com',
-    });
-
-    const response = await registerUser(app, {
-      ...testUser,
-      email: 'duplicate@example.com',
-    });
-
+    await registerUser(app, { email: 'duplicate@example.com' });
+    const response = await registerUser(app, { email: 'duplicate@example.com' });
     expect(response.statusCode).toBe(409);
   });
 });
 
 describe('POST /auth/login', () => {
-  let app: FastifyInstance;
-
   beforeAll(async () => {
-    app = await buildApp();
     await registerUser(app, testUser);
-  });
-
-  afterAll(async () => {
-    await app.close();
   });
 
   it('returns 200 with accessToken and refreshToken for correct credentials', async () => {
@@ -190,19 +143,12 @@ describe('POST /auth/login', () => {
 });
 
 describe('POST /auth/refresh', () => {
-  let app: FastifyInstance;
   let validRefreshToken: string;
 
   beforeAll(async () => {
-    app = await buildApp();
-
     const res = await registerUser(app, testUser);
     const body = res.json();
     validRefreshToken = body.refreshToken;
-  });
-
-  afterAll(async () => {
-    await app.close();
   });
 
   it('returns 200 with new token pair for valid refresh token', async () => {
@@ -221,10 +167,7 @@ describe('POST /auth/refresh', () => {
   });
 
   it('old refresh token becomes invalid after rotation', async () => {
-    const regRes = await registerUser(app, {
-      ...testUser,
-      email: 'rotation@example.com',
-    });
+    const regRes = await registerUser(app, { email: 'rotation@example.com' });
     const originalToken = regRes.json().refreshToken;
 
     const firstRefresh = await app.inject({
@@ -264,26 +207,18 @@ describe('POST /auth/refresh', () => {
 });
 
 describe('GET /auth/me', () => {
-  let app: FastifyInstance;
   let accessToken: string;
 
   beforeAll(async () => {
-    app = await buildApp();
-
-    const res = await registerUser(app, testUser);
-    const body = res.json();
-    accessToken = body.accessToken;
-  });
-
-  afterAll(async () => {
-    await app.close();
+    const { accessToken: token } = await registerAndGetToken(app, testUser);
+    accessToken = token;
   });
 
   it('returns 200 with user profile when authenticated', async () => {
     const response = await app.inject({
       method: 'GET',
       url: '/auth/me',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
     });
 
     expect(response.statusCode).toBe(200);
@@ -299,7 +234,7 @@ describe('GET /auth/me', () => {
     const response = await app.inject({
       method: 'GET',
       url: '/auth/me',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
     });
 
     const body = response.json();
@@ -319,7 +254,7 @@ describe('GET /auth/me', () => {
     const response = await app.inject({
       method: 'GET',
       url: '/auth/me',
-      headers: { authorization: 'Bearer invalid.jwt.token' },
+      headers: authHeader('invalid.jwt.token'),
     });
 
     expect(response.statusCode).toBe(401);

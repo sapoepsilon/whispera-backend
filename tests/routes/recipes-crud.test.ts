@@ -1,10 +1,13 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 
-import { buildApp } from '../../src/server.js';
-
-const UUID_REGEX =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import {
+  buildTestApp,
+  registerAndGetToken,
+  authHeader,
+  UUID_REGEX,
+  NON_EXISTENT_UUID,
+} from '../helpers.js';
 
 const validRecipe = {
   name: 'Summarize Article',
@@ -16,45 +19,25 @@ const validRecipe = {
   outputFormat: 'markdown',
 };
 
-function authHeader(token: string) {
-  return { authorization: 'Bearer ' + token };
-}
+let app: FastifyInstance;
+let accessToken: string;
+let secondUserToken: string;
+
+beforeAll(async () => {
+  app = await buildTestApp();
+
+  const first = await registerAndGetToken(app);
+  accessToken = first.accessToken;
+
+  const second = await registerAndGetToken(app);
+  secondUserToken = second.accessToken;
+});
+
+afterAll(async () => {
+  await app.close();
+});
 
 describe('Recipes CRUD', () => {
-  let app: FastifyInstance;
-  let accessToken: string;
-  let secondUserToken: string;
-
-  beforeAll(async () => {
-    app = await buildApp();
-
-    const registerRes = await app.inject({
-      method: 'POST',
-      url: '/auth/register',
-      payload: {
-        email: 'recipes-test@example.com',
-        password: 'Password123!',
-        name: 'Recipe Tester',
-      },
-    });
-    accessToken = registerRes.json().accessToken;
-
-    const secondRes = await app.inject({
-      method: 'POST',
-      url: '/auth/register',
-      payload: {
-        email: 'recipes-other@example.com',
-        password: 'Password123!',
-        name: 'Other User',
-      },
-    });
-    secondUserToken = secondRes.json().accessToken;
-  });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
   describe('POST /recipes', () => {
     it('returns 201 with created recipe containing all fields', async () => {
       const res = await app.inject({
@@ -107,7 +90,7 @@ describe('Recipes CRUD', () => {
     });
 
     it('outputFormat defaults to "text" when omitted', async () => {
-      const { outputFormat, ...withoutFormat } = validRecipe;
+      const { outputFormat: _, ...withoutFormat } = validRecipe;
 
       const res = await app.inject({
         method: 'POST',
@@ -121,7 +104,7 @@ describe('Recipes CRUD', () => {
     });
 
     it('returns 400 for missing name', async () => {
-      const { name, ...withoutName } = validRecipe;
+      const { name: _, ...withoutName } = validRecipe;
 
       const res = await app.inject({
         method: 'POST',
@@ -391,10 +374,9 @@ describe('Recipes CRUD', () => {
     });
 
     it('returns 404 for non-existent recipe', async () => {
-      const fakeId = '00000000-0000-0000-0000-000000000000';
       const res = await app.inject({
         method: 'PUT',
-        url: `/recipes/${fakeId}`,
+        url: `/recipes/${NON_EXISTENT_UUID}`,
         headers: authHeader(accessToken),
         payload: { name: 'Ghost' },
       });
@@ -567,10 +549,9 @@ describe('Recipes CRUD', () => {
     });
 
     it('returns 404 for non-existent recipe', async () => {
-      const fakeId = '00000000-0000-0000-0000-000000000000';
       const res = await app.inject({
         method: 'DELETE',
-        url: `/recipes/${fakeId}`,
+        url: `/recipes/${NON_EXISTENT_UUID}`,
         headers: authHeader(accessToken),
       });
 
@@ -604,7 +585,7 @@ describe('Recipes CRUD', () => {
     it('returns 401 without auth', async () => {
       const res = await app.inject({
         method: 'DELETE',
-        url: '/recipes/00000000-0000-0000-0000-000000000000',
+        url: `/recipes/${NON_EXISTENT_UUID}`,
       });
 
       expect(res.statusCode).toBe(401);

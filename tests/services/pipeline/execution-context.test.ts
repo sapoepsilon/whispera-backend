@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 
 import { ExecutionContext } from '../../src/services/pipeline/context.js';
+import { UUID_REGEX } from '../../helpers.js';
 
 describe('ExecutionContext', () => {
   const recipeId = '550e8400-e29b-41d4-a716-446655440000';
@@ -14,9 +15,7 @@ describe('ExecutionContext', () => {
 
   describe('constructor', () => {
     it('sets executionId as a valid UUID', () => {
-      const uuidRegex =
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-      expect(ctx.executionId).toMatch(uuidRegex);
+      expect(ctx.executionId).toMatch(UUID_REGEX);
     });
 
     it('sets recipeId from constructor argument', () => {

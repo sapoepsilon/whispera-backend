@@ -1,101 +1,53 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 
-import { buildApp } from '../../src/server.js';
+import {
+  buildTestApp,
+  registerAndGetToken,
+  createRecipe,
+  authHeader,
+  parseSSEEvents,
+  NON_EXISTENT_UUID,
+} from '../helpers.js';
 
-const testUser = {
-  email: 'exec-test@example.com',
-  password: 'ValidPass1',
-  name: 'Exec Test User',
+const sampleRecipe = {
+  name: 'Test LLM Recipe',
+  steps: [
+    {
+      type: 'llm',
+      name: 'Summarize',
+      config: {
+        prompt: 'Summarize: {{input}}',
+        model: 'claude-4',
+      },
+    },
+  ],
 };
 
-const otherUser = {
-  email: 'exec-other@example.com',
-  password: 'ValidPass1',
-  name: 'Other User',
-};
+let app: FastifyInstance;
 
-async function registerAndGetToken(
-  app: FastifyInstance,
-  user: { email: string; password: string; name: string },
-): Promise<string> {
-  const res = await app.inject({
-    method: 'POST',
-    url: '/auth/register',
-    payload: user,
-  });
-  return res.json().accessToken;
-}
+beforeAll(async () => {
+  app = await buildTestApp();
+});
 
-async function createRecipe(
-  app: FastifyInstance,
-  token: string,
-  recipe: Record<string, unknown>,
-): Promise<{ id: string }> {
-  const res = await app.inject({
-    method: 'POST',
-    url: '/recipes',
-    headers: { authorization: `Bearer ${token}` },
-    payload: recipe,
-  });
-  return res.json();
-}
-
-function parseSSEEvents(body: string): Array<{ event: string; data: unknown }> {
-  const events: Array<{ event: string; data: unknown }> = [];
-  const blocks = body.split('\n\n').filter((b) => b.trim().length > 0);
-  for (const block of blocks) {
-    const lines = block.split('\n');
-    let event = '';
-    let data = '';
-    for (const line of lines) {
-      if (line.startsWith('event: ')) {
-        event = line.slice('event: '.length);
-      } else if (line.startsWith('data: ')) {
-        data = line.slice('data: '.length);
-      }
-    }
-    if (event && data) {
-      try {
-        events.push({ event, data: JSON.parse(data) });
-      } catch {
-        events.push({ event, data });
-      }
-    }
-  }
-  return events;
-}
+afterAll(async () => {
+  await app.close();
+});
 
 describe('POST /recipes/:id/execute', () => {
-  let app: FastifyInstance;
   let token: string;
   let otherToken: string;
   let recipeId: string;
 
-  const sampleRecipe = {
-    name: 'Test LLM Recipe',
-    steps: [
-      {
-        type: 'llm',
-        name: 'Summarize',
-        config: {
-          prompt: 'Summarize: {{input}}',
-          model: 'claude-4',
-        },
-      },
-    ],
-  };
-
   beforeAll(async () => {
-    app = await buildApp();
-    token = await registerAndGetToken(app, testUser);
-    otherToken = await registerAndGetToken(app, otherUser);
+    const first = await registerAndGetToken(app);
+    token = first.accessToken;
+
+    const second = await registerAndGetToken(app);
+    otherToken = second.accessToken;
+
     const recipe = await createRecipe(app, token, sampleRecipe);
     recipeId = recipe.id;
-  });
-
-  afterAll(async () => {
-    await app.close();
   });
 
   it('returns 401 without auth', async () => {
@@ -109,11 +61,10 @@ describe('POST /recipes/:id/execute', () => {
   });
 
   it('returns 404 for non-existent recipe', async () => {
-    const fakeId = '00000000-0000-0000-0000-000000000000';
     const res = await app.inject({
       method: 'POST',
-      url: `/recipes/${fakeId}/execute`,
-      headers: { authorization: `Bearer ${token}` },
+      url: `/recipes/${NON_EXISTENT_UUID}/execute`,
+      headers: authHeader(token),
       payload: { input: 'hello' },
     });
 
@@ -124,7 +75,7 @@ describe('POST /recipes/:id/execute', () => {
     const res = await app.inject({
       method: 'POST',
       url: `/recipes/${recipeId}/execute`,
-      headers: { authorization: `Bearer ${otherToken}` },
+      headers: authHeader(otherToken),
       payload: { input: 'hello' },
     });
 
@@ -135,7 +86,7 @@ describe('POST /recipes/:id/execute', () => {
     const res = await app.inject({
       method: 'POST',
       url: `/recipes/${recipeId}/execute`,
-      headers: { authorization: `Bearer ${token}` },
+      headers: authHeader(token),
       payload: { input: 'Test article content' },
     });
 
@@ -151,7 +102,7 @@ describe('POST /recipes/:id/execute', () => {
     const execRes = await app.inject({
       method: 'POST',
       url: `/recipes/${recipeId}/execute`,
-      headers: { authorization: `Bearer ${token}` },
+      headers: authHeader(token),
       payload: { input: 'Persist test' },
     });
 
@@ -161,7 +112,7 @@ describe('POST /recipes/:id/execute', () => {
     const getRes = await app.inject({
       method: 'GET',
       url: `/executions/${executionId}`,
-      headers: { authorization: `Bearer ${token}` },
+      headers: authHeader(token),
     });
 
     expect(getRes.statusCode).toBe(200);
@@ -188,7 +139,7 @@ describe('POST /recipes/:id/execute', () => {
     const res = await app.inject({
       method: 'POST',
       url: `/recipes/${failRecipe.id}/execute`,
-      headers: { authorization: `Bearer ${token}` },
+      headers: authHeader(token),
       payload: { input: 'trigger failure' },
     });
 
@@ -201,18 +152,18 @@ describe('POST /recipes/:id/execute', () => {
     const res = await app.inject({
       method: 'POST',
       url: `/recipes/${recipeId}/execute`,
-      headers: { authorization: `Bearer ${token}` },
+      headers: authHeader(token),
       payload: { input: 'Stream test', stream: true },
     });
 
     expect(res.headers['content-type']).toContain('text/event-stream');
   });
 
-  it('streaming: emits step:start, step:chunk, step:complete, execution:complete events', async () => {
+  it('streaming: emits step:start, step:complete, execution:complete events', async () => {
     const res = await app.inject({
       method: 'POST',
       url: `/recipes/${recipeId}/execute`,
-      headers: { authorization: `Bearer ${token}` },
+      headers: authHeader(token),
       payload: { input: 'Stream events test', stream: true },
     });
 
@@ -226,17 +177,12 @@ describe('POST /recipes/:id/execute', () => {
 });
 
 describe('GET /recipes/:id/executions', () => {
-  let app: FastifyInstance;
   let token: string;
   let recipeId: string;
 
   beforeAll(async () => {
-    app = await buildApp();
-    token = await registerAndGetToken(app, {
-      email: 'exec-list@example.com',
-      password: 'ValidPass1',
-      name: 'List User',
-    });
+    const result = await registerAndGetToken(app);
+    token = result.accessToken;
 
     const recipe = await createRecipe(app, token, {
       name: 'List Executions Recipe',
@@ -253,19 +199,15 @@ describe('GET /recipes/:id/executions', () => {
     await app.inject({
       method: 'POST',
       url: `/recipes/${recipeId}/execute`,
-      headers: { authorization: `Bearer ${token}` },
+      headers: authHeader(token),
       payload: { input: 'exec 1' },
     });
     await app.inject({
       method: 'POST',
       url: `/recipes/${recipeId}/execute`,
-      headers: { authorization: `Bearer ${token}` },
+      headers: authHeader(token),
       payload: { input: 'exec 2' },
     });
-  });
-
-  afterAll(async () => {
-    await app.close();
   });
 
   it('returns 401 without auth', async () => {
@@ -278,11 +220,10 @@ describe('GET /recipes/:id/executions', () => {
   });
 
   it('returns 404 for non-existent recipe', async () => {
-    const fakeId = '00000000-0000-0000-0000-000000000000';
     const res = await app.inject({
       method: 'GET',
-      url: `/recipes/${fakeId}/executions`,
-      headers: { authorization: `Bearer ${token}` },
+      url: `/recipes/${NON_EXISTENT_UUID}/executions`,
+      headers: authHeader(token),
     });
 
     expect(res.statusCode).toBe(404);
@@ -292,7 +233,7 @@ describe('GET /recipes/:id/executions', () => {
     const res = await app.inject({
       method: 'GET',
       url: `/recipes/${recipeId}/executions`,
-      headers: { authorization: `Bearer ${token}` },
+      headers: authHeader(token),
     });
 
     expect(res.statusCode).toBe(200);
@@ -312,7 +253,7 @@ describe('GET /recipes/:id/executions', () => {
     const res = await app.inject({
       method: 'GET',
       url: `/recipes/${recipeId}/executions`,
-      headers: { authorization: `Bearer ${token}` },
+      headers: authHeader(token),
     });
 
     const body = res.json();
@@ -324,7 +265,7 @@ describe('GET /recipes/:id/executions', () => {
     const res = await app.inject({
       method: 'GET',
       url: `/recipes/${recipeId}/executions?page=1&limit=1`,
-      headers: { authorization: `Bearer ${token}` },
+      headers: authHeader(token),
     });
 
     const body = res.json();
@@ -334,23 +275,16 @@ describe('GET /recipes/:id/executions', () => {
 });
 
 describe('GET /executions/:id', () => {
-  let app: FastifyInstance;
   let token: string;
   let otherToken: string;
   let executionId: string;
 
   beforeAll(async () => {
-    app = await buildApp();
-    token = await registerAndGetToken(app, {
-      email: 'exec-detail@example.com',
-      password: 'ValidPass1',
-      name: 'Detail User',
-    });
-    otherToken = await registerAndGetToken(app, {
-      email: 'exec-detail-other@example.com',
-      password: 'ValidPass1',
-      name: 'Other Detail User',
-    });
+    const first = await registerAndGetToken(app);
+    token = first.accessToken;
+
+    const second = await registerAndGetToken(app);
+    otherToken = second.accessToken;
 
     const recipe = await createRecipe(app, token, {
       name: 'Detail Recipe',
@@ -366,15 +300,11 @@ describe('GET /executions/:id', () => {
     const execRes = await app.inject({
       method: 'POST',
       url: `/recipes/${recipe.id}/execute`,
-      headers: { authorization: `Bearer ${token}` },
+      headers: authHeader(token),
       payload: { input: 'detail test' },
     });
 
     executionId = execRes.json().executionId;
-  });
-
-  afterAll(async () => {
-    await app.close();
   });
 
   it('returns 401 without auth', async () => {
@@ -387,11 +317,10 @@ describe('GET /executions/:id', () => {
   });
 
   it('returns 404 for non-existent execution', async () => {
-    const fakeId = '00000000-0000-0000-0000-000000000000';
     const res = await app.inject({
       method: 'GET',
-      url: `/executions/${fakeId}`,
-      headers: { authorization: `Bearer ${token}` },
+      url: `/executions/${NON_EXISTENT_UUID}`,
+      headers: authHeader(token),
     });
 
     expect(res.statusCode).toBe(404);
@@ -401,7 +330,7 @@ describe('GET /executions/:id', () => {
     const res = await app.inject({
       method: 'GET',
       url: `/executions/${executionId}`,
-      headers: { authorization: `Bearer ${otherToken}` },
+      headers: authHeader(otherToken),
     });
 
     expect(res.statusCode).toBe(404);
@@ -411,7 +340,7 @@ describe('GET /executions/:id', () => {
     const res = await app.inject({
       method: 'GET',
       url: `/executions/${executionId}`,
-      headers: { authorization: `Bearer ${token}` },
+      headers: authHeader(token),
     });
 
     expect(res.statusCode).toBe(200);

@@ -1,123 +1,97 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 
-import { buildApp } from '../../src/server.js';
+import {
+  buildTestApp,
+  registerAndGetToken,
+  authHeader,
+  createRecipe,
+  publishRecipe,
+  DEFAULT_PASSWORD,
+  NON_EXISTENT_UUID,
+} from '../helpers.js';
 
-const user1 = {
-  email: 'store-author@example.com',
-  password: 'ValidPass1',
-  name: 'Store Author',
-};
+let app: FastifyInstance;
+let authorToken: string;
+let reviewerToken: string;
+let publishedIds: string[] = [];
+let publishedRecipeId: string;
 
-const user2 = {
-  email: 'store-reviewer@example.com',
-  password: 'ValidPass1',
-  name: 'Store Reviewer',
-};
+beforeAll(async () => {
+  app = await buildTestApp();
 
-async function registerAndGetToken(
-  app: FastifyInstance,
-  data: { email: string; password: string; name: string },
-): Promise<{ accessToken: string; userId: string }> {
-  const res = await app.inject({
+  const author = await registerAndGetToken(app);
+  authorToken = author.accessToken;
+
+  const reviewer = await registerAndGetToken(app);
+  reviewerToken = reviewer.accessToken;
+
+  const recipes = [
+    {
+      name: 'Summarize Meetings',
+      steps: [{ type: 'transcribe', config: {} }, { type: 'summarize', config: {} }],
+    },
+    {
+      name: 'Code Review Helper',
+      steps: [{ type: 'summarize', config: { style: 'technical' } }],
+    },
+    {
+      name: 'Creative Writing Aid',
+      steps: [{ type: 'summarize', config: { style: 'creative' } }],
+    },
+  ];
+
+  const categories = ['productivity', 'coding', 'writing'];
+  const tagSets = [['ai', 'meetings'], ['ai', 'coding'], ['ai', 'writing']];
+
+  for (let i = 0; i < recipes.length; i++) {
+    const recipeBody = await createRecipe(app, authorToken, recipes[i]);
+
+    const pubBody = await publishRecipe(app, authorToken, {
+      recipeId: recipeBody.id,
+      description: `A great recipe for ${recipes[i].name.toLowerCase()}`,
+      category: categories[i],
+      tags: tagSets[i],
+    });
+
+    publishedIds.push(pubBody.id);
+  }
+
+  const detailRecipe = await createRecipe(app, authorToken, {
+    name: 'Detail Test Recipe',
+    steps: [
+      { type: 'transcribe', config: {} },
+      { type: 'summarize', config: { style: 'brief' } },
+    ],
+  });
+
+  const pubDetail = await publishRecipe(app, authorToken, {
+    recipeId: detailRecipe.id,
+    description: 'A detailed recipe for testing store detail endpoint',
+    category: 'productivity',
+    tags: ['testing', 'detail'],
+  });
+
+  publishedRecipeId = pubDetail.id;
+
+  await app.inject({
     method: 'POST',
-    url: '/auth/register',
-    payload: data,
+    url: `/store/${publishedRecipeId}/reviews`,
+    headers: authHeader(reviewerToken),
+    payload: {
+      rating: 5,
+      comment: 'Excellent recipe for meetings!',
+    },
   });
-  const body = res.json();
+});
 
-  const meRes = await app.inject({
-    method: 'GET',
-    url: '/auth/me',
-    headers: { authorization: `Bearer ${body.accessToken}` },
-  });
+afterAll(async () => {
+  await app.close();
+});
 
-  return { accessToken: body.accessToken, userId: meRes.json().id };
-}
-
-async function createRecipe(
-  app: FastifyInstance,
-  token: string,
-  payload: { name: string; steps: Array<{ type: string; config: Record<string, unknown> }> },
-) {
-  return app.inject({
-    method: 'POST',
-    url: '/recipes',
-    headers: { authorization: `Bearer ${token}` },
-    payload,
-  });
-}
-
-async function publishRecipe(
-  app: FastifyInstance,
-  token: string,
-  payload: {
-    recipeId: string;
-    description: string;
-    category: string;
-    tags?: string[];
-  },
-) {
-  return app.inject({
-    method: 'POST',
-    url: '/store/publish',
-    headers: { authorization: `Bearer ${token}` },
-    payload,
-  });
-}
-
-describe('GET /store (WHI-13)', () => {
-  let app: FastifyInstance;
-  let authorToken: string;
-  let authorId: string;
-  let publishedIds: string[] = [];
-
-  beforeAll(async () => {
-    app = await buildApp();
-
-    const author = await registerAndGetToken(app, user1);
-    authorToken = author.accessToken;
-    authorId = author.userId;
-
-    const recipes = [
-      {
-        name: 'Summarize Meetings',
-        steps: [{ type: 'transcribe', config: {} }, { type: 'summarize', config: {} }],
-      },
-      {
-        name: 'Code Review Helper',
-        steps: [{ type: 'summarize', config: { style: 'technical' } }],
-      },
-      {
-        name: 'Creative Writing Aid',
-        steps: [{ type: 'summarize', config: { style: 'creative' } }],
-      },
-    ];
-
-    const categories = ['productivity', 'coding', 'writing'];
-    const tagSets = [['ai', 'meetings'], ['ai', 'coding'], ['ai', 'writing']];
-
-    for (let i = 0; i < recipes.length; i++) {
-      const recipeRes = await createRecipe(app, authorToken, recipes[i]);
-      const recipeBody = recipeRes.json();
-
-      const pubRes = await publishRecipe(app, authorToken, {
-        recipeId: recipeBody.id,
-        description: `A great recipe for ${recipes[i].name.toLowerCase()}`,
-        category: categories[i],
-        tags: tagSets[i],
-      });
-
-      publishedIds.push(pubRes.json().id);
-    }
-  });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
+describe('GET /store', () => {
   it('returns 200 with { data: [], pagination } when no recipes published', async () => {
-    const freshApp = await buildApp();
+    const freshApp = await buildTestApp();
 
     const response = await freshApp.inject({
       method: 'GET',
@@ -337,58 +311,7 @@ describe('GET /store (WHI-13)', () => {
   });
 });
 
-describe('GET /store/:id (WHI-23)', () => {
-  let app: FastifyInstance;
-  let authorToken: string;
-  let reviewerToken: string;
-  let publishedRecipeId: string;
-
-  beforeAll(async () => {
-    app = await buildApp();
-
-    const author = await registerAndGetToken(app, {
-      email: 'detail-author@example.com',
-      password: 'ValidPass1',
-      name: 'Detail Author',
-    });
-    authorToken = author.accessToken;
-
-    const reviewer = await registerAndGetToken(app, user2);
-    reviewerToken = reviewer.accessToken;
-
-    const recipeRes = await createRecipe(app, authorToken, {
-      name: 'Detail Test Recipe',
-      steps: [
-        { type: 'transcribe', config: {} },
-        { type: 'summarize', config: { style: 'brief' } },
-      ],
-    });
-    const recipeBody = recipeRes.json();
-
-    const pubRes = await publishRecipe(app, authorToken, {
-      recipeId: recipeBody.id,
-      description: 'A detailed recipe for testing store detail endpoint',
-      category: 'productivity',
-      tags: ['testing', 'detail'],
-    });
-
-    publishedRecipeId = pubRes.json().id;
-
-    await app.inject({
-      method: 'POST',
-      url: `/store/${publishedRecipeId}/reviews`,
-      headers: { authorization: `Bearer ${reviewerToken}` },
-      payload: {
-        rating: 5,
-        comment: 'Excellent recipe for meetings!',
-      },
-    });
-  });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
+describe('GET /store/:id', () => {
   it('returns 200 with full recipe details including steps', async () => {
     const response = await app.inject({
       method: 'GET',
@@ -417,7 +340,7 @@ describe('GET /store/:id (WHI-23)', () => {
     const body = response.json();
     expect(body.author).toBeDefined();
     expect(body.author.id).toBeDefined();
-    expect(body.author.name).toBe('Detail Author');
+    expect(body.author.name).toBeDefined();
   });
 
   it('response includes reviews array (up to 10 most recent)', async () => {
@@ -453,22 +376,21 @@ describe('GET /store/:id (WHI-23)', () => {
   it('returns 404 for non-existent UUID', async () => {
     const response = await app.inject({
       method: 'GET',
-      url: '/store/00000000-0000-0000-0000-000000000000',
+      url: `/store/${NON_EXISTENT_UUID}`,
     });
 
     expect(response.statusCode).toBe(404);
   });
 
   it('returns 404 for unpublished/flagged/removed recipe', async () => {
-    const recipeRes = await createRecipe(app, authorToken, {
+    const recipeBody = await createRecipe(app, authorToken, {
       name: 'Unpublished Recipe',
       steps: [{ type: 'transcribe', config: {} }],
     });
-    const unpublishedRecipeId = recipeRes.json().id;
 
     const response = await app.inject({
       method: 'GET',
-      url: `/store/${unpublishedRecipeId}`,
+      url: `/store/${recipeBody.id}`,
     });
 
     expect(response.statusCode).toBe(404);

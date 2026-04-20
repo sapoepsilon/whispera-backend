@@ -1,44 +1,30 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 
-import { buildApp } from '../../src/server.js';
+import { buildTestApp, registerAndGetToken, authHeader } from '../../helpers.js';
 
-const testUser = {
-  email: 'provider-integration@example.com',
-  password: 'ValidPass1',
-  name: 'Provider Integration User',
-};
+let app: FastifyInstance;
 
-const multiKeyUser = {
-  email: 'provider-multi@example.com',
-  password: 'ValidPass1',
-  name: 'Multi Provider User',
-};
+beforeAll(async () => {
+  app = await buildTestApp();
+});
+
+afterAll(async () => {
+  await app.close();
+});
 
 describe('BYOK works for Claude (Anthropic)', () => {
-  let app: FastifyInstance;
   let accessToken: string;
 
   beforeAll(async () => {
-    app = await buildApp();
-
-    const res = await app.inject({
-      method: 'POST',
-      url: '/auth/register',
-      payload: testUser,
-    });
-    accessToken = res.json().accessToken;
-  });
-
-  afterAll(async () => {
-    await app.close();
+    ({ accessToken } = await registerAndGetToken(app));
   });
 
   it('adds a Claude API key and returns 201 with metadata', async () => {
     const response = await app.inject({
       method: 'POST',
       url: '/auth/api-keys',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
       payload: {
         provider: 'anthropic',
         key: 'sk-ant-api03-test-claude-key-valid-1234567890abcdef',
@@ -59,7 +45,7 @@ describe('BYOK works for Claude (Anthropic)', () => {
     const response = await app.inject({
       method: 'GET',
       url: '/auth/api-keys',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
     });
 
     expect(response.statusCode).toBe(200);
@@ -76,7 +62,7 @@ describe('BYOK works for Claude (Anthropic)', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/chat/completions',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
       payload: {
         provider: 'anthropic',
         model: 'claude-sonnet-4-20250514',
@@ -94,33 +80,17 @@ describe('BYOK works for Claude (Anthropic)', () => {
 });
 
 describe('BYOK works for OpenAI', () => {
-  let app: FastifyInstance;
   let accessToken: string;
 
   beforeAll(async () => {
-    app = await buildApp();
-
-    const res = await app.inject({
-      method: 'POST',
-      url: '/auth/register',
-      payload: {
-        email: 'provider-openai@example.com',
-        password: 'ValidPass1',
-        name: 'OpenAI BYOK User',
-      },
-    });
-    accessToken = res.json().accessToken;
-  });
-
-  afterAll(async () => {
-    await app.close();
+    ({ accessToken } = await registerAndGetToken(app));
   });
 
   it('adds an OpenAI API key and returns 201 with metadata', async () => {
     const response = await app.inject({
       method: 'POST',
       url: '/auth/api-keys',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
       payload: {
         provider: 'openai',
         key: 'sk-test-openai-valid-key-1234567890abcdef',
@@ -141,7 +111,7 @@ describe('BYOK works for OpenAI', () => {
     const response = await app.inject({
       method: 'GET',
       url: '/auth/api-keys',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
     });
 
     expect(response.statusCode).toBe(200);
@@ -158,7 +128,7 @@ describe('BYOK works for OpenAI', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/chat/completions',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
       payload: {
         provider: 'openai',
         model: 'gpt-4o',
@@ -176,33 +146,17 @@ describe('BYOK works for OpenAI', () => {
 });
 
 describe('Provider Router resolution', () => {
-  let app: FastifyInstance;
   let accessToken: string;
 
   beforeAll(async () => {
-    app = await buildApp();
-
-    const res = await app.inject({
-      method: 'POST',
-      url: '/auth/register',
-      payload: {
-        email: 'provider-router@example.com',
-        password: 'ValidPass1',
-        name: 'Router Test User',
-      },
-    });
-    accessToken = res.json().accessToken;
-  });
-
-  afterAll(async () => {
-    await app.close();
+    ({ accessToken } = await registerAndGetToken(app));
   });
 
   it('uses BYOK key when one exists for the requested provider', async () => {
     await app.inject({
       method: 'POST',
       url: '/auth/api-keys',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
       payload: {
         provider: 'anthropic',
         key: 'sk-ant-api03-test-router-key-1234567890abcdef',
@@ -213,7 +167,7 @@ describe('Provider Router resolution', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/chat/completions',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
       payload: {
         provider: 'anthropic',
         model: 'claude-sonnet-4-20250514',
@@ -231,7 +185,7 @@ describe('Provider Router resolution', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/chat/completions',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
       payload: {
         provider: 'openai',
         model: 'gpt-4o',
@@ -247,33 +201,17 @@ describe('Provider Router resolution', () => {
 });
 
 describe('Key validation on add', () => {
-  let app: FastifyInstance;
   let accessToken: string;
 
   beforeAll(async () => {
-    app = await buildApp();
-
-    const res = await app.inject({
-      method: 'POST',
-      url: '/auth/register',
-      payload: {
-        email: 'provider-validation@example.com',
-        password: 'ValidPass1',
-        name: 'Validation User',
-      },
-    });
-    accessToken = res.json().accessToken;
-  });
-
-  afterAll(async () => {
-    await app.close();
+    ({ accessToken } = await registerAndGetToken(app));
   });
 
   it('rejects an invalid Anthropic key with 422', async () => {
     const response = await app.inject({
       method: 'POST',
       url: '/auth/api-keys',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
       payload: {
         provider: 'anthropic',
         key: 'totally-not-a-real-key',
@@ -288,7 +226,7 @@ describe('Key validation on add', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/auth/api-keys',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
       payload: {
         provider: 'openai',
         key: 'totally-not-a-real-key',
@@ -303,7 +241,7 @@ describe('Key validation on add', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/auth/api-keys',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
       payload: {
         provider: 'openai',
         key: '',
@@ -316,29 +254,17 @@ describe('Key validation on add', () => {
 });
 
 describe('Multiple providers simultaneously', () => {
-  let app: FastifyInstance;
   let accessToken: string;
 
   beforeAll(async () => {
-    app = await buildApp();
-
-    const res = await app.inject({
-      method: 'POST',
-      url: '/auth/register',
-      payload: multiKeyUser,
-    });
-    accessToken = res.json().accessToken;
-  });
-
-  afterAll(async () => {
-    await app.close();
+    ({ accessToken } = await registerAndGetToken(app));
   });
 
   it('user can add both an Anthropic and an OpenAI key', async () => {
     const claudeRes = await app.inject({
       method: 'POST',
       url: '/auth/api-keys',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
       payload: {
         provider: 'anthropic',
         key: 'sk-ant-api03-test-multi-claude-key-1234567890ab',
@@ -349,7 +275,7 @@ describe('Multiple providers simultaneously', () => {
     const openaiRes = await app.inject({
       method: 'POST',
       url: '/auth/api-keys',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
       payload: {
         provider: 'openai',
         key: 'sk-test-multi-openai-key-1234567890abcdef',
@@ -365,7 +291,7 @@ describe('Multiple providers simultaneously', () => {
     const response = await app.inject({
       method: 'GET',
       url: '/auth/api-keys',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
     });
 
     expect(response.statusCode).toBe(200);
@@ -380,7 +306,7 @@ describe('Multiple providers simultaneously', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/chat/completions',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
       payload: {
         provider: 'anthropic',
         model: 'claude-sonnet-4-20250514',
@@ -396,7 +322,7 @@ describe('Multiple providers simultaneously', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/chat/completions',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
       payload: {
         provider: 'openai',
         model: 'gpt-4o',
@@ -410,28 +336,16 @@ describe('Multiple providers simultaneously', () => {
 });
 
 describe('Key deletion falls back to credits', () => {
-  let app: FastifyInstance;
   let accessToken: string;
   let claudeKeyId: string;
 
   beforeAll(async () => {
-    app = await buildApp();
-
-    const res = await app.inject({
-      method: 'POST',
-      url: '/auth/register',
-      payload: {
-        email: 'provider-deletion@example.com',
-        password: 'ValidPass1',
-        name: 'Deletion User',
-      },
-    });
-    accessToken = res.json().accessToken;
+    ({ accessToken } = await registerAndGetToken(app));
 
     const keyRes = await app.inject({
       method: 'POST',
       url: '/auth/api-keys',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
       payload: {
         provider: 'anthropic',
         key: 'sk-ant-api03-test-deletion-key-1234567890abcdef',
@@ -441,15 +355,11 @@ describe('Key deletion falls back to credits', () => {
     claudeKeyId = keyRes.json().id;
   });
 
-  afterAll(async () => {
-    await app.close();
-  });
-
   it('uses BYOK before deletion', async () => {
     const response = await app.inject({
       method: 'POST',
       url: '/chat/completions',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
       payload: {
         provider: 'anthropic',
         model: 'claude-sonnet-4-20250514',
@@ -465,7 +375,7 @@ describe('Key deletion falls back to credits', () => {
     const response = await app.inject({
       method: 'DELETE',
       url: `/auth/api-keys/${claudeKeyId}`,
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
     });
 
     expect(response.statusCode).toBe(204);
@@ -475,7 +385,7 @@ describe('Key deletion falls back to credits', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/chat/completions',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
       payload: {
         provider: 'anthropic',
         model: 'claude-sonnet-4-20250514',
@@ -491,7 +401,7 @@ describe('Key deletion falls back to credits', () => {
     const response = await app.inject({
       method: 'GET',
       url: '/auth/api-keys',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
     });
 
     expect(response.statusCode).toBe(200);

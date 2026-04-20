@@ -1,45 +1,80 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 
-import { buildApp } from '../../src/server.js';
 import { encrypt, decrypt } from '../../src/services/crypto/index.js';
+import {
+  buildTestApp,
+  registerAndGetToken,
+  authHeader,
+  DEFAULT_PASSWORD,
+  NON_EXISTENT_UUID,
+} from '../helpers.js';
 
-const testUser = {
-  email: 'byok-test@example.com',
-  password: 'ValidPass1',
-  name: 'BYOK Test User',
-};
+let app: FastifyInstance;
+let accessToken: string;
+let freshAccessToken: string;
+let otherAccessToken: string;
+let keyId: string;
+let otherKeyId: string;
 
-const otherUser = {
-  email: 'byok-other@example.com',
-  password: 'ValidPass1',
-  name: 'Other User',
-};
+beforeAll(async () => {
+  app = await buildTestApp();
+
+  const main = await registerAndGetToken(app);
+  accessToken = main.accessToken;
+
+  await app.inject({
+    method: 'POST',
+    url: '/auth/api-keys',
+    headers: authHeader(accessToken),
+    payload: {
+      provider: 'openai',
+      key: 'sk-test-list-key-1234567890abcdef',
+      label: 'List Test Key',
+    },
+  });
+
+  const fresh = await registerAndGetToken(app);
+  freshAccessToken = fresh.accessToken;
+
+  const deleteKeyRes = await app.inject({
+    method: 'POST',
+    url: '/auth/api-keys',
+    headers: authHeader(accessToken),
+    payload: {
+      provider: 'openai',
+      key: 'sk-test-delete-key-1234567890abcd',
+      label: 'Delete Test Key',
+    },
+  });
+  keyId = deleteKeyRes.json().id;
+
+  const other = await registerAndGetToken(app);
+  otherAccessToken = other.accessToken;
+
+  const otherKeyRes = await app.inject({
+    method: 'POST',
+    url: '/auth/api-keys',
+    headers: authHeader(otherAccessToken),
+    payload: {
+      provider: 'anthropic',
+      key: 'sk-ant-test-other-user-key-123456',
+      label: 'Other User Key',
+    },
+  });
+  otherKeyId = otherKeyRes.json().id;
+});
+
+afterAll(async () => {
+  await app.close();
+});
 
 describe('POST /auth/api-keys', () => {
-  let app: FastifyInstance;
-  let accessToken: string;
-
-  beforeAll(async () => {
-    app = await buildApp();
-
-    const res = await app.inject({
-      method: 'POST',
-      url: '/auth/register',
-      payload: testUser,
-    });
-    accessToken = res.json().accessToken;
-  });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
   it('returns 201 with { id, provider, label, createdAt } for valid key', async () => {
     const response = await app.inject({
       method: 'POST',
       url: '/auth/api-keys',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
       payload: {
         provider: 'openai',
         key: 'sk-test-valid-key-1234567890abcdef',
@@ -61,7 +96,7 @@ describe('POST /auth/api-keys', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/auth/api-keys',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
       payload: {
         provider: 'anthropic',
         key: rawKey,
@@ -81,7 +116,7 @@ describe('POST /auth/api-keys', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/auth/api-keys',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
       payload: {
         key: 'sk-test-1234567890abcdef',
         label: 'No Provider',
@@ -95,7 +130,7 @@ describe('POST /auth/api-keys', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/auth/api-keys',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
       payload: {
         provider: 'openai',
         label: 'No Key',
@@ -109,7 +144,7 @@ describe('POST /auth/api-keys', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/auth/api-keys',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
       payload: {
         provider: 'openai',
         key: 'not-a-valid-api-key',
@@ -124,7 +159,7 @@ describe('POST /auth/api-keys', () => {
     await app.inject({
       method: 'POST',
       url: '/auth/api-keys',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
       payload: {
         provider: 'openai',
         key: 'sk-test-duplicate-check-key-1111',
@@ -135,7 +170,7 @@ describe('POST /auth/api-keys', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/auth/api-keys',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
       payload: {
         provider: 'openai',
         key: 'sk-test-duplicate-check-key-2222',
@@ -162,52 +197,11 @@ describe('POST /auth/api-keys', () => {
 });
 
 describe('GET /auth/api-keys', () => {
-  let app: FastifyInstance;
-  let accessToken: string;
-  let freshAccessToken: string;
-
-  beforeAll(async () => {
-    app = await buildApp();
-
-    const res = await app.inject({
-      method: 'POST',
-      url: '/auth/register',
-      payload: testUser,
-    });
-    accessToken = res.json().accessToken;
-
-    await app.inject({
-      method: 'POST',
-      url: '/auth/api-keys',
-      headers: { authorization: `Bearer ${accessToken}` },
-      payload: {
-        provider: 'openai',
-        key: 'sk-test-list-key-1234567890abcdef',
-        label: 'List Test Key',
-      },
-    });
-
-    const freshRes = await app.inject({
-      method: 'POST',
-      url: '/auth/register',
-      payload: {
-        email: 'byok-fresh@example.com',
-        password: 'ValidPass1',
-        name: 'Fresh User',
-      },
-    });
-    freshAccessToken = freshRes.json().accessToken;
-  });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
   it('returns 200 with { keys: [...] }', async () => {
     const response = await app.inject({
       method: 'GET',
       url: '/auth/api-keys',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
     });
 
     expect(response.statusCode).toBe(200);
@@ -225,7 +219,7 @@ describe('GET /auth/api-keys', () => {
     const response = await app.inject({
       method: 'GET',
       url: '/auth/api-keys',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
     });
 
     const body = response.json();
@@ -243,7 +237,7 @@ describe('GET /auth/api-keys', () => {
     const response = await app.inject({
       method: 'GET',
       url: '/auth/api-keys',
-      headers: { authorization: `Bearer ${freshAccessToken}` },
+      headers: authHeader(freshAccessToken),
     });
 
     expect(response.statusCode).toBe(200);
@@ -263,63 +257,11 @@ describe('GET /auth/api-keys', () => {
 });
 
 describe('DELETE /auth/api-keys/:id', () => {
-  let app: FastifyInstance;
-  let accessToken: string;
-  let otherAccessToken: string;
-  let keyId: string;
-  let otherKeyId: string;
-
-  beforeAll(async () => {
-    app = await buildApp();
-
-    const res = await app.inject({
-      method: 'POST',
-      url: '/auth/register',
-      payload: testUser,
-    });
-    accessToken = res.json().accessToken;
-
-    const keyRes = await app.inject({
-      method: 'POST',
-      url: '/auth/api-keys',
-      headers: { authorization: `Bearer ${accessToken}` },
-      payload: {
-        provider: 'openai',
-        key: 'sk-test-delete-key-1234567890abcd',
-        label: 'Delete Test Key',
-      },
-    });
-    keyId = keyRes.json().id;
-
-    const otherRes = await app.inject({
-      method: 'POST',
-      url: '/auth/register',
-      payload: otherUser,
-    });
-    otherAccessToken = otherRes.json().accessToken;
-
-    const otherKeyRes = await app.inject({
-      method: 'POST',
-      url: '/auth/api-keys',
-      headers: { authorization: `Bearer ${otherAccessToken}` },
-      payload: {
-        provider: 'anthropic',
-        key: 'sk-ant-test-other-user-key-123456',
-        label: 'Other User Key',
-      },
-    });
-    otherKeyId = otherKeyRes.json().id;
-  });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
   it('returns 204 for successful deletion', async () => {
     const response = await app.inject({
       method: 'DELETE',
       url: `/auth/api-keys/${keyId}`,
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
     });
 
     expect(response.statusCode).toBe(204);
@@ -328,8 +270,8 @@ describe('DELETE /auth/api-keys/:id', () => {
   it('returns 404 for non-existent key', async () => {
     const response = await app.inject({
       method: 'DELETE',
-      url: '/auth/api-keys/00000000-0000-0000-0000-000000000000',
-      headers: { authorization: `Bearer ${accessToken}` },
+      url: `/auth/api-keys/${NON_EXISTENT_UUID}`,
+      headers: authHeader(accessToken),
     });
 
     expect(response.statusCode).toBe(404);
@@ -339,7 +281,7 @@ describe('DELETE /auth/api-keys/:id', () => {
     const response = await app.inject({
       method: 'DELETE',
       url: `/auth/api-keys/${otherKeyId}`,
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
     });
 
     expect(response.statusCode).toBe(404);

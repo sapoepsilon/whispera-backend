@@ -1,39 +1,34 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 
-import { buildApp } from '../../src/server.js';
 import { CreditService } from '../../src/services/billing/credits.js';
+import {
+  buildTestApp,
+  registerAndGetToken,
+  authHeader,
+  DEFAULT_PASSWORD,
+} from '../helpers.js';
 
-const testUser = {
-  email: 'credits-test@example.com',
-  password: 'ValidPass1',
-  name: 'Credits Test User',
-};
+let app: FastifyInstance;
+let accessToken: string;
+
+beforeAll(async () => {
+  app = await buildTestApp();
+
+  const user = await registerAndGetToken(app);
+  accessToken = user.accessToken;
+});
+
+afterAll(async () => {
+  await app.close();
+});
 
 describe('GET /billing/credits', () => {
-  let app: FastifyInstance;
-  let accessToken: string;
-
-  beforeAll(async () => {
-    app = await buildApp();
-
-    const res = await app.inject({
-      method: 'POST',
-      url: '/auth/register',
-      payload: testUser,
-    });
-    accessToken = res.json().accessToken;
-  });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
   it('returns 200 with { balance: 0, transactions: [] } for new user', async () => {
     const response = await app.inject({
       method: 'GET',
       url: '/billing/credits',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
     });
 
     expect(response.statusCode).toBe(200);
@@ -54,29 +49,11 @@ describe('GET /billing/credits', () => {
 });
 
 describe('POST /billing/credits/purchase', () => {
-  let app: FastifyInstance;
-  let accessToken: string;
-
-  beforeAll(async () => {
-    app = await buildApp();
-
-    const res = await app.inject({
-      method: 'POST',
-      url: '/auth/register',
-      payload: testUser,
-    });
-    accessToken = res.json().accessToken;
-  });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
   it('returns 200 with { sessionId, url } for valid package', async () => {
     const response = await app.inject({
       method: 'POST',
       url: '/billing/credits/purchase',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
       payload: { packageId: 'starter' },
     });
 
@@ -93,7 +70,7 @@ describe('POST /billing/credits/purchase', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/billing/credits/purchase',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(accessToken),
       payload: { packageId: 'nonexistent-package' },
     });
 
@@ -112,22 +89,6 @@ describe('POST /billing/credits/purchase', () => {
 });
 
 describe('POST /billing/webhooks/stripe', () => {
-  let app: FastifyInstance;
-
-  beforeAll(async () => {
-    app = await buildApp();
-
-    await app.inject({
-      method: 'POST',
-      url: '/auth/register',
-      payload: testUser,
-    });
-  });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
   it('returns 200 { received: true } for valid webhook', async () => {
     const response = await app.inject({
       method: 'POST',
@@ -157,21 +118,12 @@ describe('POST /billing/webhooks/stripe', () => {
   });
 
   it('credits are added after checkout.session.completed event', async () => {
-    const registerRes = await app.inject({
-      method: 'POST',
-      url: '/auth/register',
-      payload: {
-        email: 'credits-webhook@example.com',
-        password: 'ValidPass1',
-        name: 'Webhook User',
-      },
-    });
-    const accessToken = registerRes.json().accessToken;
+    const webhookUser = await registerAndGetToken(app);
 
     const meRes = await app.inject({
       method: 'GET',
       url: '/auth/me',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(webhookUser.accessToken),
     });
     const userId = meRes.json().id;
 
@@ -199,7 +151,7 @@ describe('POST /billing/webhooks/stripe', () => {
     const creditsRes = await app.inject({
       method: 'GET',
       url: '/billing/credits',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(webhookUser.accessToken),
     });
 
     const body = creditsRes.json();
@@ -207,21 +159,12 @@ describe('POST /billing/webhooks/stripe', () => {
   });
 
   it('duplicate webhook does not double-credit (idempotency)', async () => {
-    const registerRes = await app.inject({
-      method: 'POST',
-      url: '/auth/register',
-      payload: {
-        email: 'credits-idempotent@example.com',
-        password: 'ValidPass1',
-        name: 'Idempotent User',
-      },
-    });
-    const accessToken = registerRes.json().accessToken;
+    const idempotentUser = await registerAndGetToken(app);
 
     const meRes = await app.inject({
       method: 'GET',
       url: '/auth/me',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(idempotentUser.accessToken),
     });
     const userId = meRes.json().id;
 
@@ -253,7 +196,7 @@ describe('POST /billing/webhooks/stripe', () => {
     const firstCredits = await app.inject({
       method: 'GET',
       url: '/billing/credits',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(idempotentUser.accessToken),
     });
     const balanceAfterFirst = firstCredits.json().balance;
 
@@ -267,7 +210,7 @@ describe('POST /billing/webhooks/stripe', () => {
     const secondCredits = await app.inject({
       method: 'GET',
       url: '/billing/credits',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: authHeader(idempotentUser.accessToken),
     });
     const balanceAfterSecond = secondCredits.json().balance;
 

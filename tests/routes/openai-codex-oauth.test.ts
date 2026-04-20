@@ -1,42 +1,33 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 
-import { buildApp } from '../../src/server.js';
-
-const testUser = {
-  email: 'codex-oauth-test@example.com',
-  password: 'ValidPass1',
-  name: 'Codex OAuth Test User',
-};
+import {
+  buildTestApp,
+  registerAndGetToken,
+  authHeader,
+  completeOAuthFlow,
+} from '../helpers.js';
 
 let app: FastifyInstance;
 let accessToken: string;
 
 beforeAll(async () => {
-  app = await buildApp();
+  app = await buildTestApp();
 
-  const registerRes = await app.inject({
-    method: 'POST',
-    url: '/auth/register',
-    payload: testUser,
-  });
-  accessToken = registerRes.json().accessToken;
+  const user = await registerAndGetToken(app);
+  accessToken = user.accessToken;
 });
 
 afterAll(async () => {
   await app.close();
 });
 
-function authHeader() {
-  return { authorization: `Bearer ${accessToken}` };
-}
-
-describe('GET /auth/oauth/openai — initiate Codex OAuth flow', () => {
+describe('GET /auth/oauth/openai', () => {
   it('returns 200 with authorization URL', async () => {
     const res = await app.inject({
       method: 'GET',
       url: '/auth/oauth/openai',
-      headers: authHeader(),
+      headers: authHeader(accessToken),
     });
 
     expect(res.statusCode).toBe(200);
@@ -49,7 +40,7 @@ describe('GET /auth/oauth/openai — initiate Codex OAuth flow', () => {
     const res = await app.inject({
       method: 'GET',
       url: '/auth/oauth/openai',
-      headers: authHeader(),
+      headers: authHeader(accessToken),
     });
 
     const url = new URL(res.json().url);
@@ -71,7 +62,7 @@ describe('GET /auth/oauth/openai — initiate Codex OAuth flow', () => {
   });
 });
 
-describe('GET /auth/oauth/openai/callback — handle OAuth callback', () => {
+describe('GET /auth/oauth/openai/callback', () => {
   it('redirects with error for invalid state', async () => {
     const res = await app.inject({
       method: 'GET',
@@ -95,14 +86,7 @@ describe('GET /auth/oauth/openai/callback — handle OAuth callback', () => {
   });
 
   it('redirects to frontend with success on valid flow', async () => {
-    const initiateRes = await app.inject({
-      method: 'GET',
-      url: '/auth/oauth/openai',
-      headers: authHeader(),
-    });
-
-    const url = new URL(initiateRes.json().url);
-    const state = url.searchParams.get('state');
+    const state = await completeOAuthFlow(app, accessToken);
 
     const res = await app.inject({
       method: 'GET',
@@ -116,12 +100,12 @@ describe('GET /auth/oauth/openai/callback — handle OAuth callback', () => {
   });
 });
 
-describe('DELETE /auth/oauth/openai — disconnect', () => {
+describe('DELETE /auth/oauth/openai', () => {
   it('returns 204 after disconnecting', async () => {
     const res = await app.inject({
       method: 'DELETE',
       url: '/auth/oauth/openai',
-      headers: authHeader(),
+      headers: authHeader(accessToken),
     });
 
     expect(res.statusCode).toBe(204);
@@ -139,13 +123,7 @@ describe('DELETE /auth/oauth/openai — disconnect', () => {
 
 describe('Provider Router — Codex OAuth resolution', () => {
   it('uses Codex OAuth token when no BYOK exists for OpenAI', async () => {
-    const initiateRes = await app.inject({
-      method: 'GET',
-      url: '/auth/oauth/openai',
-      headers: authHeader(),
-    });
-    const url = new URL(initiateRes.json().url);
-    const state = url.searchParams.get('state');
+    const state = await completeOAuthFlow(app, accessToken);
 
     await app.inject({
       method: 'GET',
@@ -155,7 +133,7 @@ describe('Provider Router — Codex OAuth resolution', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/chat/completions',
-      headers: authHeader(),
+      headers: authHeader(accessToken),
       payload: {
         provider: 'openai',
         messages: [{ role: 'user', content: 'hello' }],
@@ -170,14 +148,14 @@ describe('Provider Router — Codex OAuth resolution', () => {
     await app.inject({
       method: 'POST',
       url: '/auth/api-keys',
-      headers: authHeader(),
+      headers: authHeader(accessToken),
       payload: { provider: 'openai', key: 'sk-test-byok-key' },
     });
 
     const res = await app.inject({
       method: 'POST',
       url: '/chat/completions',
-      headers: authHeader(),
+      headers: authHeader(accessToken),
       payload: {
         provider: 'openai',
         messages: [{ role: 'user', content: 'hello' }],
@@ -192,13 +170,13 @@ describe('Provider Router — Codex OAuth resolution', () => {
     await app.inject({
       method: 'DELETE',
       url: '/auth/oauth/openai',
-      headers: authHeader(),
+      headers: authHeader(accessToken),
     });
 
     const res = await app.inject({
       method: 'POST',
       url: '/chat/completions',
-      headers: authHeader(),
+      headers: authHeader(accessToken),
       payload: {
         provider: 'openai',
         messages: [{ role: 'user', content: 'hello' }],
@@ -212,13 +190,7 @@ describe('Provider Router — Codex OAuth resolution', () => {
 
 describe('Token refresh', () => {
   it('automatically refreshes expired OAuth tokens', async () => {
-    const initiateRes = await app.inject({
-      method: 'GET',
-      url: '/auth/oauth/openai',
-      headers: authHeader(),
-    });
-    const url = new URL(initiateRes.json().url);
-    const state = url.searchParams.get('state');
+    const state = await completeOAuthFlow(app, accessToken);
 
     await app.inject({
       method: 'GET',
@@ -228,7 +200,7 @@ describe('Token refresh', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/chat/completions',
-      headers: authHeader(),
+      headers: authHeader(accessToken),
       payload: {
         provider: 'openai',
         messages: [{ role: 'user', content: 'hello' }],

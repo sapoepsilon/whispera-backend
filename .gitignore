@@ -1,5 +1,31 @@
 node_modules/
 dist/
 .env
+.env.*
+!.env.example
 *.log
+
+# Drizzle
 drizzle/meta/
+
+# Claude Code
+.claude/
+.mcp.json
+.mcp.json.*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Docker
+docker-compose.override.yml
+
+# Coverage
+coverage/
+
+# OS
+Thumbs.db

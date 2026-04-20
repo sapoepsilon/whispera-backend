@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { buildApp as _buildApp } from '../src/server.js';
 
-export const DEFAULT_PASSWORD = 'ValidPass1';
+export const DEFAULT_PASSWORD = 'TestPassword123!';
 export const NON_EXISTENT_UUID = '00000000-0000-0000-0000-000000000000';
 export const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -9,40 +9,24 @@ export async function buildTestApp(): Promise<FastifyInstance> {
   return _buildApp();
 }
 
-export async function registerUser(
-  app: FastifyInstance,
-  overrides: Partial<{ email: string; password: string; name: string }> = {},
-) {
-  const payload = {
-    email: overrides.email ?? `test-${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`,
-    password: overrides.password ?? DEFAULT_PASSWORD,
-    name: overrides.name ?? 'Test User',
-  };
-
-  const res = await app.inject({
-    method: 'POST',
-    url: '/auth/register',
-    payload,
-  });
-
-  return res;
+export function generateTestUserId(): string {
+  return `test-clerk-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 export async function registerAndGetToken(
   app: FastifyInstance,
-  overrides: Partial<{ email: string; password: string; name: string }> = {},
-): Promise<{ accessToken: string; refreshToken: string; email: string }> {
-  const res = await registerUser(app, overrides);
-  const body = res.json();
-  return {
-    accessToken: body.accessToken,
-    refreshToken: body.refreshToken,
-    email: overrides.email ?? '',
-  };
+): Promise<{ accessToken: string }> {
+  const clerkId = generateTestUserId();
+  await app.inject({
+    method: 'GET',
+    url: '/auth/me',
+    headers: { authorization: `Bearer ${clerkId}` },
+  });
+  return { accessToken: clerkId };
 }
 
-export function authHeader(token: string) {
-  return { authorization: `Bearer ${token}` };
+export function authHeader(clerkUserId: string) {
+  return { authorization: `Bearer ${clerkUserId}` };
 }
 
 export async function createRecipe(

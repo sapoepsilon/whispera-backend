@@ -2,12 +2,8 @@ import Fastify from 'fastify';
 import fastifyEnv from '@fastify/env';
 import fastifySensible from '@fastify/sensible';
 import { fileURLToPath } from 'node:url';
-import { dirname } from 'node:path';
 import { envSchema } from './config/env.js';
 import type { EnvConfig } from './config/env.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -37,7 +33,7 @@ export async function buildApp() {
   if (process.env.NODE_ENV === 'test' && !_testTruncated) {
     _testTruncated = true;
     const { sql } = await import('drizzle-orm');
-    await app.db.execute(sql`TRUNCATE users, recipes, executions, store_recipes, store_reviews, oauth_connections, credit_balances, credit_transactions, api_keys CASCADE`).catch((e: unknown) => {});
+    await app.db.execute(sql`TRUNCATE users, recipes, executions, store_recipes, store_reviews, oauth_connections, credit_balances, credit_transactions, api_keys CASCADE`).catch((_e: unknown) => {});
   }
 
   const { default: authPlugin } = await import('./plugins/auth.js');

@@ -7,32 +7,22 @@ export class ExecutionService {
   constructor(private db: Database) {}
 
   async save(data: NewExecution) {
-    if (data.id) {
-      const existing = await this.db
-        .select()
-        .from(executions)
-        .where(eq(executions.id, data.id))
-        .limit(1);
-
-      if (existing.length > 0) {
-        const [updated] = await this.db
-          .update(executions)
-          .set({
-            status: data.status,
-            steps: data.steps,
-            variables: data.variables,
-            metadata: data.metadata,
-            error: data.error,
-            completedAt: data.completedAt,
-          })
-          .where(eq(executions.id, data.id))
-          .returning();
-        return updated;
-      }
-    }
-
-    const [created] = await this.db.insert(executions).values(data).returning();
-    return created;
+    const [result] = await this.db
+      .insert(executions)
+      .values(data)
+      .onConflictDoUpdate({
+        target: executions.id,
+        set: {
+          status: data.status,
+          steps: data.steps,
+          variables: data.variables,
+          metadata: data.metadata,
+          error: data.error,
+          completedAt: data.completedAt,
+        },
+      })
+      .returning();
+    return result;
   }
 
   async listByRecipe(

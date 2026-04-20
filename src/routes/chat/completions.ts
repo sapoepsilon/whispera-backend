@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 import { apiKeys } from '../../db/schema/api-keys.js';
@@ -10,6 +10,10 @@ interface CompletionBody {
   messages: Array<{ role: string; content: string }>;
   provider?: string;
   model?: string;
+}
+
+function isClaudeProvider(provider: string): boolean {
+  return provider === 'claude' || provider === 'anthropic';
 }
 
 export default async function chatCompletionsRoute(app: FastifyInstance) {
@@ -26,12 +30,11 @@ export default async function chatCompletionsRoute(app: FastifyInstance) {
       const provider = bodyProvider ?? request.providerName ?? 'openai';
 
       if (keySource !== 'byok') {
-        const userKeys = await app.db
-          .select()
+        const [matchingKey] = await app.db
+          .select({ provider: apiKeys.provider, encryptedKey: apiKeys.encryptedKey })
           .from(apiKeys)
-          .where(eq(apiKeys.userId, request.userId));
-
-        const matchingKey = userKeys.find((k) => k.provider === provider);
+          .where(and(eq(apiKeys.userId, request.userId), eq(apiKeys.provider, provider)))
+          .limit(1);
 
         if (matchingKey) {
           keySource = 'byok';
@@ -55,7 +58,7 @@ export default async function chatCompletionsRoute(app: FastifyInstance) {
       }
 
       if (keySource === 'credits') {
-        const platformKey = provider === 'claude'
+        const platformKey = isClaudeProvider(provider)
           ? process.env.ANTHROPIC_API_KEY
           : process.env.OPENAI_API_KEY;
 
@@ -67,7 +70,7 @@ export default async function chatCompletionsRoute(app: FastifyInstance) {
       }
 
       try {
-        if (provider === 'claude' || provider === 'anthropic') {
+        if (isClaudeProvider(provider)) {
           const client = new Anthropic({ apiKey: resolvedKey! });
           const systemMsg = messages.find((m) => m.role === 'system');
           const nonSystemMsgs = messages

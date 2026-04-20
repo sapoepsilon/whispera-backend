@@ -1,10 +1,12 @@
-import { eq, sql } from 'drizzle-orm';
-import { getDb } from '../../db/index.js';
+import { eq, and, sql } from 'drizzle-orm';
 import { creditBalances, creditTransactions } from '../../db/schema/credits.js';
+import { getDb, type Database } from '../../db/index.js';
 
 export class CreditService {
-  private get db() {
-    return getDb(process.env.DATABASE_URL!);
+  private db: Database;
+
+  constructor(db?: Database) {
+    this.db = db ?? getDb(process.env.DATABASE_URL!);
   }
 
   async getBalance(userId: string): Promise<number> {
@@ -44,15 +46,18 @@ export class CreditService {
   }
 
   async deductCredits(userId: string, amount: number): Promise<void> {
-    const balance = await this.getBalance(userId);
-    if (balance < amount) {
+    const result = await this.db
+      .update(creditBalances)
+      .set({ balance: sql`balance - ${amount}` })
+      .where(and(
+        eq(creditBalances.userId, userId),
+        sql`balance >= ${amount}`,
+      ))
+      .returning();
+
+    if (result.length === 0) {
       throw new Error('InsufficientCreditsError');
     }
-
-    await this.db
-      .update(creditBalances)
-      .set({ balance: sql`${creditBalances.balance} - ${amount}` })
-      .where(eq(creditBalances.userId, userId));
 
     await this.db.insert(creditTransactions).values({
       userId,

@@ -1,8 +1,8 @@
 import fp from 'fastify-plugin';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { ProviderName } from '../types/index.js';
 
 export type KeySource = 'byok' | 'codex-oauth' | 'credits';
-export type ProviderName = 'claude' | 'openai';
 
 declare module 'fastify' {
   interface FastifyRequest {

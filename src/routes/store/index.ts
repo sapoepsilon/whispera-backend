@@ -2,8 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { StoreService } from '../../services/store/index.js';
 import { VALID_CATEGORIES } from '../../db/schema/store-recipes.js';
-
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { UUID_REGEX } from '../../utils/validation.js';
 
 const VALID_SORTS = ['popular', 'newest', 'top-rated'] as const;
 

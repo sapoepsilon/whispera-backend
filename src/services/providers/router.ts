@@ -2,8 +2,7 @@ import type { ProviderConfig } from './types.js';
 import { BaseProvider } from './adapters/base.js';
 import { ClaudeProvider } from './adapters/claude.js';
 import { OpenAIProvider } from './adapters/openai.js';
-
-type ProviderName = 'claude' | 'openai';
+import type { ProviderName } from '../../types/index.js';
 
 const PROVIDER_FACTORIES: Record<ProviderName, new (config: ProviderConfig) => BaseProvider> = {
   claude: ClaudeProvider,

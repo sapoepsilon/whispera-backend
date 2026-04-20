@@ -1,13 +1,11 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { RecipeService } from '../../services/recipes/index.js';
-
-const VALID_STEP_TYPES = ['llm', 'transform', 'conditional', 'api', 'output', 'transcribe', 'summarize'];
-
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { UUID_REGEX } from '../../utils/validation.js';
+import { STEP_TYPES } from '../../types/index.js';
 
 const stepSchema = z.object({
-  type: z.enum(VALID_STEP_TYPES as [string, ...string[]]),
+  type: z.enum(STEP_TYPES),
   config: z.record(z.string(), z.any()),
   name: z.string().optional(),
 });

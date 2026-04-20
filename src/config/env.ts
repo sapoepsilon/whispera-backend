@@ -1,5 +1,3 @@
-import { z } from 'zod';
-
 export const envSchema = {
   type: 'object' as const,
   required: ['DATABASE_URL', 'JWT_SECRET'],
@@ -16,12 +14,10 @@ export const envSchema = {
   },
 };
 
-export const zodEnvSchema = z.object({
-  PORT: z.coerce.number().default(3000),
-  HOST: z.string().default('0.0.0.0'),
-  DATABASE_URL: z.string(),
-  JWT_SECRET: z.string().min(32),
-  NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
-});
-
-export type EnvConfig = z.infer<typeof zodEnvSchema>;
+export interface EnvConfig {
+  PORT: number;
+  HOST: string;
+  DATABASE_URL: string;
+  JWT_SECRET: string;
+  NODE_ENV: 'development' | 'production' | 'test';
+}

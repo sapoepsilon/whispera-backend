@@ -1,4 +1,4 @@
-import { eq, and, sql, ilike, or, desc, asc } from 'drizzle-orm';
+import { eq, and, sql, ilike, or, desc } from 'drizzle-orm';
 import { storeRecipes } from '../../db/schema/store-recipes.js';
 import { storeReviews } from '../../db/schema/store-reviews.js';
 import { recipes } from '../../db/schema/recipes.js';
@@ -118,44 +118,46 @@ export class StoreService {
   }
 
   async getById(id: string) {
-    const [recipe] = await this.db
-      .select({
-        id: storeRecipes.id,
-        name: storeRecipes.name,
-        description: storeRecipes.description,
-        category: storeRecipes.category,
-        tags: storeRecipes.tags,
-        steps: storeRecipes.steps,
-        installCount: storeRecipes.installCount,
-        rating: storeRecipes.rating,
-        ratingCount: storeRecipes.ratingCount,
-        status: storeRecipes.status,
-        version: storeRecipes.version,
-        publishedAt: storeRecipes.publishedAt,
-        authorId: storeRecipes.authorId,
-        authorName: users.name,
-      })
-      .from(storeRecipes)
-      .leftJoin(users, eq(storeRecipes.authorId, users.id))
-      .where(and(eq(storeRecipes.id, id), eq(storeRecipes.status, 'published')))
-      .limit(1);
+    const [recipeResult, reviews] = await Promise.all([
+      this.db
+        .select({
+          id: storeRecipes.id,
+          name: storeRecipes.name,
+          description: storeRecipes.description,
+          category: storeRecipes.category,
+          tags: storeRecipes.tags,
+          steps: storeRecipes.steps,
+          installCount: storeRecipes.installCount,
+          rating: storeRecipes.rating,
+          ratingCount: storeRecipes.ratingCount,
+          status: storeRecipes.status,
+          version: storeRecipes.version,
+          publishedAt: storeRecipes.publishedAt,
+          authorId: storeRecipes.authorId,
+          authorName: users.name,
+        })
+        .from(storeRecipes)
+        .leftJoin(users, eq(storeRecipes.authorId, users.id))
+        .where(and(eq(storeRecipes.id, id), eq(storeRecipes.status, 'published')))
+        .limit(1),
+      this.db
+        .select({
+          id: storeReviews.id,
+          rating: storeReviews.rating,
+          comment: storeReviews.comment,
+          createdAt: storeReviews.createdAt,
+          userId: storeReviews.userId,
+          userName: users.name,
+        })
+        .from(storeReviews)
+        .leftJoin(users, eq(storeReviews.userId, users.id))
+        .where(eq(storeReviews.storeRecipeId, id))
+        .orderBy(desc(storeReviews.createdAt))
+        .limit(10),
+    ]);
 
+    const recipe = recipeResult[0];
     if (!recipe) return null;
-
-    const reviews = await this.db
-      .select({
-        id: storeReviews.id,
-        rating: storeReviews.rating,
-        comment: storeReviews.comment,
-        createdAt: storeReviews.createdAt,
-        userId: storeReviews.userId,
-        userName: users.name,
-      })
-      .from(storeReviews)
-      .leftJoin(users, eq(storeReviews.userId, users.id))
-      .where(eq(storeReviews.storeRecipeId, id))
-      .orderBy(desc(storeReviews.createdAt))
-      .limit(10);
 
     return {
       ...recipe,
@@ -247,7 +249,7 @@ export class StoreService {
       .values({
         userId,
         name: storeRecipe.name,
-        steps: storeRecipe.steps as any,
+        steps: storeRecipe.steps as Record<string, unknown>[],
         installedFromStoreId: storeRecipeId,
       })
       .returning();

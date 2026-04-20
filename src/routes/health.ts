@@ -11,12 +11,12 @@ function getVersion(): string {
   }
 }
 
+const version = getVersion();
+
 export default async function healthRoute(fastify: FastifyInstance) {
-  fastify.get('/health', async () => {
-    return {
-      status: 'ok',
-      timestamp: new Date().toISOString(),
-      version: getVersion(),
-    };
-  });
+  fastify.get('/health', async () => ({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    version,
+  }));
 }

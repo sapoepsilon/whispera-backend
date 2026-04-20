@@ -10,15 +10,17 @@ const purchaseSchema = z.object({
 });
 
 export default async function billingCreditsRoutes(app: FastifyInstance) {
-  const creditService = new CreditService();
+  const creditService = new CreditService(app.db);
   const stripeService = new StripeService();
 
   app.get(
     '/billing/credits',
     { preHandler: [app.authenticate] },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      const balance = await creditService.getBalance(request.userId);
-      const transactions = await creditService.getTransactions(request.userId);
+      const [balance, transactions] = await Promise.all([
+        creditService.getBalance(request.userId),
+        creditService.getTransactions(request.userId),
+      ]);
 
       return reply.code(200).send({ balance, transactions });
     },

@@ -7,8 +7,7 @@ import { ExecutionService } from '../services/execution.service.js';
 import { ExecutionContext } from '../services/pipeline/context.js';
 import { StepHandlerRegistry } from '../services/pipeline/registry.js';
 import type { StepType } from '../services/pipeline/types.js';
-
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { UUID_REGEX } from '../utils/validation.js';
 
 const executeSchema = z.object({
   input: z.string().optional().default(''),
@@ -140,6 +139,7 @@ export default async function executionRoutes(app: FastifyInstance) {
       const ctx = new ExecutionContext(recipe.id, request.userId, variables);
 
       if (stream) {
+        reply.hijack();
         reply.raw.writeHead(200, {
           'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-cache',

@@ -42,7 +42,7 @@ async function authPlugin(fastify: FastifyInstance) {
       }
 
       const [existing] = await fastify.db
-        .select()
+        .select({ id: users.id, clerkId: users.clerkId })
         .from(users)
         .where(eq(users.clerkId, clerkId))
         .limit(1);

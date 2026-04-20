@@ -2,18 +2,17 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { eq, and } from 'drizzle-orm';
 import { apiKeys } from '../../db/schema/api-keys.js';
-import { encrypt, decrypt } from '../../services/crypto/index.js';
-
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { encrypt } from '../../services/crypto/index.js';
+import { UUID_REGEX } from '../../utils/validation.js';
 
 const addKeySchema = z.object({
-  provider: z.enum(['anthropic', 'openai']),
+  provider: z.enum(['claude', 'anthropic', 'openai']),
   key: z.string().min(1),
   label: z.string().optional(),
 });
 
 function validateApiKey(provider: string, key: string): boolean {
-  if (provider === 'anthropic') {
+  if (provider === 'claude' || provider === 'anthropic') {
     return key.startsWith('sk-ant-');
   }
   if (provider === 'openai') {

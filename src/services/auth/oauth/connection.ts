@@ -17,22 +17,17 @@ export class OAuthConnectionService {
     const encryptedRefresh = refreshToken ? encrypt(refreshToken) : null;
     const expiresAt = new Date(Date.now() + expiresIn * 1000);
 
-    const [existing] = await this.db
-      .select()
-      .from(oauthConnections)
+    const updated = await this.db
+      .update(oauthConnections)
+      .set({
+        accessToken: encryptedAccess,
+        refreshToken: encryptedRefresh,
+        expiresAt,
+      })
       .where(and(eq(oauthConnections.userId, userId), eq(oauthConnections.provider, provider)))
-      .limit(1);
+      .returning();
 
-    if (existing) {
-      await this.db
-        .update(oauthConnections)
-        .set({
-          accessToken: encryptedAccess,
-          refreshToken: encryptedRefresh,
-          expiresAt,
-        })
-        .where(eq(oauthConnections.id, existing.id));
-    } else {
+    if (updated.length === 0) {
       await this.db.insert(oauthConnections).values({
         userId,
         provider,

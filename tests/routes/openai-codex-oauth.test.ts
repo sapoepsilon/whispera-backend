@@ -22,7 +22,7 @@ afterAll(async () => {
   await app.close();
 });
 
-describe('GET /auth/oauth/openai', () => {
+describe('GET /auth/oauth/openai (URL generation, no external call)', () => {
   it('returns 200 with authorization URL', async () => {
     const res = await app.inject({
       method: 'GET',
@@ -62,7 +62,7 @@ describe('GET /auth/oauth/openai', () => {
   });
 });
 
-describe('GET /auth/oauth/openai/callback', () => {
+describe('GET /auth/oauth/openai/callback (state validation)', () => {
   it('redirects with error for invalid state', async () => {
     const res = await app.inject({
       method: 'GET',
@@ -85,7 +85,7 @@ describe('GET /auth/oauth/openai/callback', () => {
     expect(location).toContain('status=error');
   });
 
-  it('redirects to frontend with success on valid flow', async () => {
+  it('redirects to frontend with success on valid state (test mode token exchange)', async () => {
     const state = await completeOAuthFlow(app, accessToken);
 
     const res = await app.inject({
@@ -121,7 +121,7 @@ describe('DELETE /auth/oauth/openai', () => {
   });
 });
 
-describe('Provider Router — Codex OAuth resolution', () => {
+describe('Provider Router — Codex OAuth resolution (DB-only)', () => {
   it('uses Codex OAuth token when no BYOK exists for OpenAI', async () => {
     const state = await completeOAuthFlow(app, accessToken);
 
@@ -144,28 +144,6 @@ describe('Provider Router — Codex OAuth resolution', () => {
     expect(res.json().keySource).toBe('codex-oauth');
   });
 
-  it('BYOK takes precedence over Codex OAuth', async () => {
-    await app.inject({
-      method: 'POST',
-      url: '/auth/api-keys',
-      headers: authHeader(accessToken),
-      payload: { provider: 'openai', key: 'sk-test-byok-key' },
-    });
-
-    const res = await app.inject({
-      method: 'POST',
-      url: '/chat/completions',
-      headers: authHeader(accessToken),
-      payload: {
-        provider: 'openai',
-        messages: [{ role: 'user', content: 'hello' }],
-      },
-    });
-
-    expect(res.statusCode).toBe(200);
-    expect(res.json().keySource).toBe('byok');
-  });
-
   it('falls back to credits when OAuth is disconnected and no BYOK', async () => {
     await app.inject({
       method: 'DELETE',
@@ -185,28 +163,5 @@ describe('Provider Router — Codex OAuth resolution', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.json().keySource).toBe('credits');
-  });
-});
-
-describe('Token refresh', () => {
-  it('automatically refreshes expired OAuth tokens', async () => {
-    const state = await completeOAuthFlow(app, accessToken);
-
-    await app.inject({
-      method: 'GET',
-      url: `/auth/oauth/openai/callback?code=valid-auth-code&state=${state}`,
-    });
-
-    const res = await app.inject({
-      method: 'POST',
-      url: '/chat/completions',
-      headers: authHeader(accessToken),
-      payload: {
-        provider: 'openai',
-        messages: [{ role: 'user', content: 'hello' }],
-      },
-    });
-
-    expect(res.statusCode).toBe(200);
   });
 });

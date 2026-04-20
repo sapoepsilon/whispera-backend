@@ -1,5 +1,7 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
+import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
 import { RecipeService } from '../services/recipes/index.js';
 import { ExecutionService } from '../services/execution.service.js';
 import { ExecutionContext } from '../services/pipeline/context.js';
@@ -24,8 +26,11 @@ function createRegistry(): StepHandlerRegistry {
 
   registry.register('llm' as StepType, {
     async execute(input: unknown, config: Record<string, unknown>) {
-      if (config.provider === 'nonexistent-provider') {
-        throw new Error(`Unknown provider: ${config.provider}`);
+      const provider = String(config.provider ?? 'openai');
+      const apiKey = String(config.apiKey ?? '');
+
+      if (!apiKey) {
+        throw new Error('No API key provided for LLM step');
       }
 
       const prompt = String(config.prompt ?? '').replace(
@@ -33,7 +38,27 @@ function createRegistry(): StepHandlerRegistry {
         String(input ?? ''),
       );
 
-      return `Mock LLM response for: ${prompt}`;
+      if (provider === 'claude') {
+        const client = new Anthropic({ apiKey });
+        const response = await client.messages.create({
+          model: String(config.model ?? 'claude-sonnet-4-20250514'),
+          max_tokens: Number(config.maxTokens ?? 1024),
+          messages: [{ role: 'user', content: prompt }],
+        });
+
+        return response.content
+          .filter((b) => b.type === 'text')
+          .map((b) => b.text)
+          .join('');
+      }
+
+      const client = new OpenAI({ apiKey });
+      const completion = await client.chat.completions.create({
+        model: String(config.model ?? 'gpt-4o'),
+        messages: [{ role: 'user', content: prompt }],
+      });
+
+      return completion.choices[0]?.message?.content ?? '';
     },
   });
 

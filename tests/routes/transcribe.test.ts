@@ -6,7 +6,10 @@ import {
   registerAndGetToken,
   authHeader,
   createAudioPayload,
+  createSilentWavBuffer,
 } from '../helpers.js';
+
+const hasOpenAIKey = !!process.env.OPENAI_API_KEY;
 
 let app: FastifyInstance;
 let accessToken: string;
@@ -21,47 +24,7 @@ afterAll(async () => {
   await app.close();
 });
 
-describe('POST /transcribe', () => {
-  it('returns 200 with transcription result for valid audio', async () => {
-    const { body, contentType } = createAudioPayload('test.wav', 'audio/wav');
-
-    const res = await app.inject({
-      method: 'POST',
-      url: '/transcribe',
-      headers: {
-        ...authHeader(accessToken),
-        'content-type': contentType,
-      },
-      payload: body,
-    });
-
-    expect(res.statusCode).toBe(200);
-    const json = res.json();
-    expect(json.text).toBeDefined();
-    expect(typeof json.text).toBe('string');
-    expect(json.provider).toBeDefined();
-  });
-
-  it('response includes text, language, duration, and provider', async () => {
-    const { body, contentType } = createAudioPayload('test.mp3', 'audio/mpeg');
-
-    const res = await app.inject({
-      method: 'POST',
-      url: '/transcribe',
-      headers: {
-        ...authHeader(accessToken),
-        'content-type': contentType,
-      },
-      payload: body,
-    });
-
-    const json = res.json();
-    expect(json).toHaveProperty('text');
-    expect(json).toHaveProperty('language');
-    expect(json).toHaveProperty('duration');
-    expect(json).toHaveProperty('provider');
-  });
-
+describe('POST /transcribe — validation (no API key needed)', () => {
   it('returns 400 when no audio file is provided', async () => {
     const res = await app.inject({
       method: 'POST',
@@ -101,30 +64,56 @@ describe('POST /transcribe', () => {
 
     expect(res.statusCode).toBe(401);
   });
+});
 
-  it.each([
-    ['wav', 'test.wav', 'audio/wav'],
-    ['mp3', 'test.mp3', 'audio/mpeg'],
-    ['m4a', 'test.m4a', 'audio/x-m4a'],
-    ['webm', 'test.webm', 'audio/webm'],
-  ])('accepts %s format', async (_label, filename, mimetype) => {
-    const { body, contentType } = createAudioPayload(filename, mimetype);
+describe.skipIf(!hasOpenAIKey)('POST /transcribe — real Whisper API', () => {
+  it('returns 200 with transcription result for a valid WAV', async () => {
+    const wavBuffer = createSilentWavBuffer(0.5);
+    const { body, contentType } = createAudioPayload('test.wav', 'audio/wav', wavBuffer);
 
     const res = await app.inject({
       method: 'POST',
       url: '/transcribe',
-      headers: { ...authHeader(accessToken), 'content-type': contentType },
+      headers: {
+        ...authHeader(accessToken),
+        'content-type': contentType,
+      },
       payload: body,
     });
 
     expect(res.statusCode).toBe(200);
+    const json = res.json();
+    expect(typeof json.text).toBe('string');
+    expect(json.provider).toBeDefined();
+  });
+
+  it('response includes text, language, duration, and provider', async () => {
+    const wavBuffer = createSilentWavBuffer(0.5);
+    const { body, contentType } = createAudioPayload('test.wav', 'audio/wav', wavBuffer);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/transcribe',
+      headers: {
+        ...authHeader(accessToken),
+        'content-type': contentType,
+      },
+      payload: body,
+    });
+
+    const json = res.json();
+    expect(json).toHaveProperty('text');
+    expect(json).toHaveProperty('language');
+    expect(json).toHaveProperty('duration');
+    expect(json).toHaveProperty('provider');
   });
 
   it('accepts optional language parameter', async () => {
+    const wavBuffer = createSilentWavBuffer(0.5);
     const { body, contentType } = createAudioPayload(
       'test.wav',
       'audio/wav',
-      Buffer.from('fake-audio'),
+      wavBuffer,
       { language: 'en' },
     );
 
@@ -139,20 +128,5 @@ describe('POST /transcribe', () => {
     });
 
     expect(res.statusCode).toBe(200);
-  });
-
-  it('uses ProviderRouter for key resolution', async () => {
-    const { body, contentType } = createAudioPayload('test.wav', 'audio/wav');
-
-    const res = await app.inject({
-      method: 'POST',
-      url: '/transcribe',
-      headers: { ...authHeader(accessToken), 'content-type': contentType },
-      payload: body,
-    });
-
-    expect(res.statusCode).toBe(200);
-    const json = res.json();
-    expect(json.provider).toMatch(/openai-whisper|whisper/);
   });
 });

@@ -66,8 +66,8 @@ export class OpenAICodexOAuthService {
   ): Promise<{ accessToken: string; refreshToken: string; expiresIn: number }> {
     if (process.env.NODE_ENV === 'test') {
       return {
-        accessToken: `test-oauth-access-token-${Date.now()}`,
-        refreshToken: `test-oauth-refresh-token-${Date.now()}`,
+        accessToken: `test-access-token-${code}`,
+        refreshToken: `test-refresh-token-${code}`,
         expiresIn: 3600,
       };
     }
@@ -95,14 +95,6 @@ export class OpenAICodexOAuthService {
   async refreshAccessToken(
     refreshToken: string,
   ): Promise<{ accessToken: string; refreshToken: string; expiresIn: number }> {
-    if (process.env.NODE_ENV === 'test') {
-      return {
-        accessToken: `test-oauth-refreshed-token-${Date.now()}`,
-        refreshToken: `test-oauth-refresh-token-${Date.now()}`,
-        expiresIn: 3600,
-      };
-    }
-
     const response = await fetch('https://auth.openai.com/oauth/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

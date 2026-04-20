@@ -1,7 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { buildApp as _buildApp } from '../src/server.js';
 
-export const DEFAULT_PASSWORD = 'TestPassword123!';
 export const NON_EXISTENT_UUID = '00000000-0000-0000-0000-000000000000';
 export const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -63,6 +62,31 @@ export async function publishRecipe(
   });
 
   return res.json();
+}
+
+export function createSilentWavBuffer(durationSeconds = 0.1, sampleRate = 16000): Buffer {
+  const numChannels = 1;
+  const bitsPerSample = 16;
+  const bytesPerSample = bitsPerSample / 8;
+  const numSamples = Math.floor(sampleRate * durationSeconds);
+  const dataSize = numSamples * numChannels * bytesPerSample;
+  const buffer = Buffer.alloc(44 + dataSize);
+
+  buffer.write('RIFF', 0);
+  buffer.writeUInt32LE(36 + dataSize, 4);
+  buffer.write('WAVE', 8);
+  buffer.write('fmt ', 12);
+  buffer.writeUInt32LE(16, 16);
+  buffer.writeUInt16LE(1, 20);
+  buffer.writeUInt16LE(numChannels, 22);
+  buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(sampleRate * numChannels * bytesPerSample, 28);
+  buffer.writeUInt16LE(numChannels * bytesPerSample, 32);
+  buffer.writeUInt16LE(bitsPerSample, 34);
+  buffer.write('data', 36);
+  buffer.writeUInt32LE(dataSize, 40);
+
+  return buffer;
 }
 
 export function createAudioPayload(

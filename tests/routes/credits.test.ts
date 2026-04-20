@@ -6,15 +6,16 @@ import {
   buildTestApp,
   registerAndGetToken,
   authHeader,
-  DEFAULT_PASSWORD,
 } from '../helpers.js';
+
+const hasStripeKey = !!process.env.STRIPE_SECRET_KEY;
+const hasStripeWebhookSecret = !!process.env.STRIPE_WEBHOOK_SECRET;
 
 let app: FastifyInstance;
 let accessToken: string;
 
 beforeAll(async () => {
   app = await buildTestApp();
-
   const user = await registerAndGetToken(app);
   accessToken = user.accessToken;
 });
@@ -23,7 +24,7 @@ afterAll(async () => {
   await app.close();
 });
 
-describe('GET /billing/credits', () => {
+describe('GET /billing/credits (DB-only)', () => {
   it('returns 200 with { balance: 0, transactions: [] } for new user', async () => {
     const response = await app.inject({
       method: 'GET',
@@ -48,7 +49,7 @@ describe('GET /billing/credits', () => {
   });
 });
 
-describe('POST /billing/credits/purchase', () => {
+describe.skipIf(!hasStripeKey)('POST /billing/credits/purchase (Stripe API)', () => {
   it('returns 200 with { sessionId, url } for valid package', async () => {
     const response = await app.inject({
       method: 'POST',
@@ -88,7 +89,34 @@ describe('POST /billing/credits/purchase', () => {
   });
 });
 
-describe('POST /billing/webhooks/stripe', () => {
+describe.skipIf(!hasStripeWebhookSecret)('POST /billing/webhooks/stripe (webhook verification)', () => {
+  it('returns 400 for invalid signature', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/billing/webhooks/stripe',
+      headers: {
+        'stripe-signature': 'invalid-signature',
+        'content-type': 'application/json',
+      },
+      payload: {
+        type: 'checkout.session.completed',
+        data: {
+          object: {
+            id: 'cs_test_bad_sig',
+            metadata: {
+              userId: 'test-user-id',
+              packageId: 'starter',
+            },
+          },
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
+});
+
+describe('POST /billing/webhooks/stripe (DB-only, test mode)', () => {
   it('returns 200 { received: true } for valid webhook', async () => {
     const response = await app.inject({
       method: 'POST',
@@ -216,34 +244,9 @@ describe('POST /billing/webhooks/stripe', () => {
 
     expect(balanceAfterSecond).toBe(balanceAfterFirst);
   });
-
-  it('returns 400 for invalid signature', async () => {
-    const response = await app.inject({
-      method: 'POST',
-      url: '/billing/webhooks/stripe',
-      headers: {
-        'stripe-signature': 'invalid-signature',
-        'content-type': 'application/json',
-      },
-      payload: {
-        type: 'checkout.session.completed',
-        data: {
-          object: {
-            id: 'cs_test_bad_sig',
-            metadata: {
-              userId: 'test-user-id',
-              packageId: 'starter',
-            },
-          },
-        },
-      },
-    });
-
-    expect(response.statusCode).toBe(400);
-  });
 });
 
-describe('CreditService', () => {
+describe('CreditService (DB-only)', () => {
   let creditService: CreditService;
 
   beforeAll(() => {
@@ -251,7 +254,7 @@ describe('CreditService', () => {
   });
 
   it('deductCredits() reduces balance', async () => {
-    const userId = 'test-user-deduct';
+    const userId = `test-user-deduct-${Date.now()}`;
     await creditService.addCredits(userId, 100);
     await creditService.deductCredits(userId, 30);
 
@@ -260,7 +263,7 @@ describe('CreditService', () => {
   });
 
   it('deductCredits() throws InsufficientCreditsError when balance too low', async () => {
-    const userId = 'test-user-insufficient';
+    const userId = `test-user-insufficient-${Date.now()}`;
     await creditService.addCredits(userId, 10);
 
     await expect(
@@ -269,7 +272,7 @@ describe('CreditService', () => {
   });
 
   it('hasEnoughCredits() returns true/false correctly', async () => {
-    const userId = 'test-user-check';
+    const userId = `test-user-check-${Date.now()}`;
     await creditService.addCredits(userId, 25);
 
     const hasEnough = await creditService.hasEnoughCredits(userId, 20);

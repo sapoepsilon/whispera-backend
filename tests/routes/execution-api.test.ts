@@ -10,6 +10,8 @@ import {
   NON_EXISTENT_UUID,
 } from '../helpers.js';
 
+const hasOpenAIKey = !!process.env.OPENAI_API_KEY;
+
 const sampleRecipe = {
   name: 'Test LLM Recipe',
   steps: [
@@ -34,7 +36,7 @@ afterAll(async () => {
   await app.close();
 });
 
-describe('POST /recipes/:id/execute', () => {
+describe('POST /recipes/:id/execute — auth and validation', () => {
   let token: string;
   let otherToken: string;
   let recipeId: string;
@@ -80,6 +82,19 @@ describe('POST /recipes/:id/execute', () => {
     });
 
     expect(res.statusCode).toBe(404);
+  });
+});
+
+describe.skipIf(!hasOpenAIKey)('POST /recipes/:id/execute — real LLM execution', () => {
+  let token: string;
+  let recipeId: string;
+
+  beforeAll(async () => {
+    const first = await registerAndGetToken(app);
+    token = first.accessToken;
+
+    const recipe = await createRecipe(app, token, sampleRecipe);
+    recipeId = recipe.id;
   });
 
   it('non-streaming: returns JSON with executionId, status, steps, output', async () => {
@@ -176,7 +191,7 @@ describe('POST /recipes/:id/execute', () => {
   });
 });
 
-describe('GET /recipes/:id/executions', () => {
+describe.skipIf(!hasOpenAIKey)('GET /recipes/:id/executions — execution history', () => {
   let token: string;
   let recipeId: string;
 
@@ -274,7 +289,7 @@ describe('GET /recipes/:id/executions', () => {
   });
 });
 
-describe('GET /executions/:id', () => {
+describe.skipIf(!hasOpenAIKey)('GET /executions/:id — execution detail', () => {
   let token: string;
   let otherToken: string;
   let executionId: string;

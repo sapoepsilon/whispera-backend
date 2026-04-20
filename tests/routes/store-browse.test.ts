@@ -7,7 +7,6 @@ import {
   authHeader,
   createRecipe,
   publishRecipe,
-  DEFAULT_PASSWORD,
   NON_EXISTENT_UUID,
 } from '../helpers.js';
 

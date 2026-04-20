@@ -44,33 +44,34 @@ export default async function billingCreditsRoutes(app: FastifyInstance) {
     '/billing/webhooks/stripe',
     async (request: FastifyRequest, reply: FastifyReply) => {
       const signature = request.headers['stripe-signature'] as string;
+      if (!signature) {
+        return reply.code(400).send({ error: 'Missing stripe-signature header' });
+      }
 
-      if (!stripeService.validateWebhookSignature(signature)) {
+      let event;
+      try {
+        const rawBody = (request.body as Buffer) ?? '';
+        event = stripeService.validateWebhookSignature(rawBody, signature);
+      } catch {
         return reply.code(400).send({ error: 'Invalid webhook signature' });
       }
 
-      const body = request.body as {
-        type: string;
-        data: {
-          object: {
-            id: string;
-            metadata: {
-              userId: string;
-              packageId: string;
-            };
-          };
+      if (event.type === 'checkout.session.completed') {
+        const session = event.data.object as {
+          id: string;
+          metadata: { userId: string; packageId: string } | null;
         };
-      };
 
-      if (body.type === 'checkout.session.completed') {
-        const { id: sessionId, metadata } = body.data.object;
-        const { userId, packageId } = metadata;
+        const userId = session.metadata?.userId;
+        const packageId = session.metadata?.packageId;
 
-        const alreadyProcessed = await creditService.hasProcessedSession(sessionId);
-        if (!alreadyProcessed) {
-          const pkg = CREDIT_PACKAGES[packageId];
-          if (pkg) {
-            await creditService.addCredits(userId, pkg.credits, sessionId);
+        if (userId && packageId) {
+          const alreadyProcessed = await creditService.hasProcessedSession(session.id);
+          if (!alreadyProcessed) {
+            const pkg = CREDIT_PACKAGES[packageId];
+            if (pkg) {
+              await creditService.addCredits(userId, pkg.credits, session.id);
+            }
           }
         }
       }

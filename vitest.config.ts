@@ -1,6 +1,10 @@
 import path from 'node:path';
 import { defineConfig } from 'vitest/config';
 
+// API keys for e2e tests: set in .env locally or via GitHub secrets in CI.
+// OPENAI_API_KEY    — Whisper transcription, chat completions
+// STRIPE_SECRET_KEY — Stripe checkout session creation
+// STRIPE_WEBHOOK_SECRET — Stripe webhook signature verification
 export default defineConfig({
   resolve: {
     alias: {

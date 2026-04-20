@@ -49,8 +49,7 @@ src/
     recipes/index.ts     # RecipeService (CRUD operations)
     store/index.ts       # StoreService (browse, publish, install)
     billing/             # CreditService, StripeService
-    crypto/index.ts      # AES-256-GCM encrypt/decrypt for API keys
-    api-keys/index.ts    # BYOK key management
+    crypto/index.ts      # AES-256-GCM encrypt/decrypt for OAuth tokens only
 tests/
   phase-1/ through phase-6/  # organized by implementation phase
 ```
@@ -62,14 +61,14 @@ tests/
 - **Request validation**: Zod schemas parsed inside handlers, ZodError caught by global error handler returning 400
 - **Database**: Drizzle ORM with typed schemas. Use `db.insert().returning()` and `db.update().where().returning()` for atomic operations
 - **Soft deletes**: recipes use `deletedAt` column, always filter with `isNull(recipes.deletedAt)`
-- **Provider routing**: ProviderRouter resolves keys in order: BYOK → Codex OAuth (OpenAI only) → platform key + credits → error
+- **Provider routing**: ProviderRouter resolves keys in order: X-Provider-Key header (pass-through BYOK, never stored) → Codex OAuth (OpenAI only) → platform key + credits → error
 - **Pipeline execution**: PipelineExecutor iterates steps sequentially, each StepHandler produces output that feeds the next step's input
 - **SSE streaming**: use `reply.hijack()` + `reply.raw.writeHead()` for Server-Sent Events on execute endpoint
 
 ## Provider Integration
 
-- **Claude**: BYOK only (Anthropic bans third-party subscription OAuth). Users provide API key from console.anthropic.com. SDK: `@anthropic-ai/sdk`
-- **OpenAI**: BYOK + Codex OAuth ("Sign in with ChatGPT"). Users can paste API key OR authenticate via PKCE OAuth using their ChatGPT subscription (Plus/Pro/Enterprise). SDK: `openai`. Codex OAuth docs: developers.openai.com/codex/auth
+- **Claude**: Pass-through BYOK only (Anthropic bans third-party subscription OAuth). Client stores key in OS Keychain, sends via `X-Provider-Key` header per request. Backend never stores the key. SDK: `@anthropic-ai/sdk`
+- **OpenAI**: Pass-through BYOK + Codex OAuth ("Sign in with ChatGPT"). Users can send API key via header OR authenticate via PKCE OAuth using their ChatGPT subscription. SDK: `openai`. Codex OAuth docs: developers.openai.com/codex/auth
 - **Client-side Claude Code integration** (future, WHI-34): Mac app wraps local Claude Code CLI via `@anthropic-ai/claude-agent-sdk` for subscription access
 
 ## Key Conventions

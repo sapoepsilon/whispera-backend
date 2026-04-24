@@ -4,9 +4,9 @@ import {
   PipelineExecutor,
   StepHandlerRegistry,
   StepType,
-} from '../../src/services/pipeline/index.js';
+} from '../../../src/services/pipeline/index.js';
 
-import type { StepHandler, StepDefinition, PipelineResult } from '../../src/services/pipeline/index.js';
+import type { StepHandler, StepDefinition, PipelineResult } from '../../../src/services/pipeline/index.js';
 
 function createPassthroughHandler(output: unknown): StepHandler {
   return {

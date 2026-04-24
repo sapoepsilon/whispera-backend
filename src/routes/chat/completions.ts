@@ -17,10 +17,10 @@ function isClaudeProvider(provider: string): boolean {
 }
 
 export default async function chatCompletionsRoute(app: FastifyInstance) {
-  app.post(
+  app.post<{ Body: CompletionBody }>(
     '/chat/completions',
     { preHandler: [app.authenticate] },
-    async (request: FastifyRequest<{ Body: CompletionBody }>, reply: FastifyReply) => {
+    async (request, reply) => {
       const { messages, provider: bodyProvider, model } = request.body;
       const headerProviderKey = request.providerKey;
       let keySource = request.keySource;

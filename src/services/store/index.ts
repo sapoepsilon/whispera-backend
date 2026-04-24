@@ -2,6 +2,7 @@ import { eq, and, sql, ilike, or, desc } from 'drizzle-orm';
 import { storeRecipes } from '../../db/schema/store-recipes.js';
 import { storeReviews } from '../../db/schema/store-reviews.js';
 import { recipes } from '../../db/schema/recipes.js';
+import type { RecipeStep } from '../../db/schema/recipes.js';
 import { users } from '../../db/schema/users.js';
 import type { Database } from '../../db/index.js';
 
@@ -249,7 +250,7 @@ export class StoreService {
       .values({
         userId,
         name: storeRecipe.name,
-        steps: storeRecipe.steps as Record<string, unknown>[],
+        steps: storeRecipe.steps as unknown as RecipeStep[],
         installedFromStoreId: storeRecipeId,
       })
       .returning();

@@ -42,9 +42,9 @@ export default async function storeRoutes(app: FastifyInstance) {
     return reply.code(200).send(data);
   });
 
-  app.get(
+  app.get<{ Params: { id: string } }>(
     '/store/:id',
-    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    async (request, reply) => {
       const { id } = request.params;
 
       if (!UUID_REGEX.test(id)) {
@@ -83,10 +83,10 @@ export default async function storeRoutes(app: FastifyInstance) {
     },
   );
 
-  app.post(
+  app.post<{ Params: { id: string } }>(
     '/store/:id/install',
     { preHandler: [app.authenticate] },
-    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    async (request, reply) => {
       const { id } = request.params;
 
       if (!UUID_REGEX.test(id)) {
@@ -102,10 +102,10 @@ export default async function storeRoutes(app: FastifyInstance) {
     },
   );
 
-  app.post(
+  app.post<{ Params: { id: string }; Body: { rating: number; comment?: string } }>(
     '/store/:id/reviews',
     { preHandler: [app.authenticate] },
-    async (request: FastifyRequest<{ Params: { id: string }; Body: { rating: number; comment?: string } }>, reply: FastifyReply) => {
+    async (request, reply) => {
       const { id } = request.params;
       const { rating, comment } = request.body;
 

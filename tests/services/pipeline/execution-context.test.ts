@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 
-import { ExecutionContext } from '../../src/services/pipeline/context.js';
+import { ExecutionContext } from '../../../src/services/pipeline/context.js';
 import { UUID_REGEX } from '../../helpers.js';
 
 describe('ExecutionContext', () => {

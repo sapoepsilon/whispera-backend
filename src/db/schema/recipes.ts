@@ -26,7 +26,7 @@ export const recipes = pgTable('recipes', {
 export interface RecipeStep {
   type: string;
   config: Record<string, unknown>;
-  name: string;
+  name?: string;
 }
 
 export type Recipe = typeof recipes.$inferSelect;

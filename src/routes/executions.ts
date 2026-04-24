@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
@@ -103,13 +103,10 @@ export default async function executionRoutes(app: FastifyInstance) {
   const executionService = new ExecutionService(app.db);
   const registry = createRegistry();
 
-  app.post(
+  app.post<{ Params: { id: string } }>(
     '/recipes/:id/execute',
     { preHandler: [app.authenticate] },
-    async (
-      request: FastifyRequest<{ Params: { id: string } }>,
-      reply: FastifyReply,
-    ) => {
+    async (request, reply) => {
       const { id } = request.params;
 
       if (!UUID_REGEX.test(id)) {
@@ -180,7 +177,7 @@ export default async function executionRoutes(app: FastifyInstance) {
           status: snapshot.status,
           steps: snapshot.steps,
           variables: snapshot.variables,
-          metadata: snapshot.metadata,
+          metadata: snapshot.metadata as unknown as Record<string, unknown>,
           error: snapshot.error,
           startedAt: new Date(snapshot.startedAt),
           completedAt: snapshot.completedAt
@@ -202,7 +199,7 @@ export default async function executionRoutes(app: FastifyInstance) {
         status: snapshot.status,
         steps: snapshot.steps,
         variables: snapshot.variables,
-        metadata: snapshot.metadata,
+        metadata: snapshot.metadata as unknown as Record<string, unknown>,
         error: snapshot.error,
         startedAt: new Date(snapshot.startedAt),
         completedAt: snapshot.completedAt
@@ -224,13 +221,10 @@ export default async function executionRoutes(app: FastifyInstance) {
     },
   );
 
-  app.get(
+  app.get<{ Params: { id: string } }>(
     '/recipes/:id/executions',
     { preHandler: [app.authenticate] },
-    async (
-      request: FastifyRequest<{ Params: { id: string } }>,
-      reply: FastifyReply,
-    ) => {
+    async (request, reply) => {
       const { id } = request.params;
 
       if (!UUID_REGEX.test(id)) {
@@ -260,13 +254,10 @@ export default async function executionRoutes(app: FastifyInstance) {
     },
   );
 
-  app.get(
+  app.get<{ Params: { id: string } }>(
     '/executions/:id',
     { preHandler: [app.authenticate] },
-    async (
-      request: FastifyRequest<{ Params: { id: string } }>,
-      reply: FastifyReply,
-    ) => {
+    async (request, reply) => {
       const { id } = request.params;
 
       if (!UUID_REGEX.test(id)) {

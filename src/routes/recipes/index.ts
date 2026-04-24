@@ -75,10 +75,10 @@ export default async function recipesRoutes(app: FastifyInstance) {
     },
   );
 
-  app.put(
+  app.put<{ Params: { id: string } }>(
     '/recipes/:id',
     { preHandler: [app.authenticate] },
-    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    async (request, reply) => {
       const { id } = request.params;
 
       if (!UUID_REGEX.test(id)) {
@@ -104,10 +104,10 @@ export default async function recipesRoutes(app: FastifyInstance) {
     },
   );
 
-  app.delete(
+  app.delete<{ Params: { id: string } }>(
     '/recipes/:id',
     { preHandler: [app.authenticate] },
-    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    async (request, reply) => {
       const { id } = request.params;
 
       if (!UUID_REGEX.test(id)) {

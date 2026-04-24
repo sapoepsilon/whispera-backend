@@ -76,10 +76,10 @@ export default async function apiKeysRoutes(app: FastifyInstance) {
     },
   );
 
-  app.delete(
+  app.delete<{ Params: { id: string } }>(
     '/auth/api-keys/:id',
     { preHandler: [app.authenticate] },
-    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    async (request, reply) => {
       const { id } = request.params;
 
       if (!UUID_REGEX.test(id)) {

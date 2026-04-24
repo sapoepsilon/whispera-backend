@@ -4,7 +4,7 @@ import {
   ProviderRouter,
   ClaudeProvider,
   OpenAIProvider,
-} from '../../src/services/providers/index.js';
+} from '../../../src/services/providers/index.js';
 
 describe('ProviderRouter', () => {
   it('returns a ClaudeProvider for provider name "claude"', () => {

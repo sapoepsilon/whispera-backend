@@ -76,7 +76,7 @@ tests/
 - All routes export `default async function(fastify: FastifyInstance)`
 - Services are classes instantiated at route registration, not singletons
 - DB schemas in src/db/schema/ re-exported from src/db/schema/index.ts
-- Type augmentations for Fastify in src/types/fastify.d.ts
+- Type augmentations for Fastify via `declare module 'fastify'` in plugin files (not in a separate .d.ts — ambient declarations shadow the package types)
 - Migrations generated via `pnpm db:generate`, applied via `pnpm db:migrate`
 - Tests use `buildApp()` from src/server.ts and Fastify's `app.inject()` — no supertest
 

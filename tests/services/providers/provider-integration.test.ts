@@ -157,7 +157,7 @@ describe('Provider Router resolution (DB-only)', () => {
       headers: authHeader(accessToken),
       payload: {
         provider: 'anthropic',
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-4-6-20250501',
         messages: [{ role: 'user', content: 'Hello' }],
       },
     });
@@ -210,7 +210,7 @@ describe('Key deletion falls back to credits (DB-only)', () => {
       headers: authHeader(accessToken),
       payload: {
         provider: 'anthropic',
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-4-6-20250501',
         messages: [{ role: 'user', content: 'Pre-delete test' }],
       },
     });
@@ -236,7 +236,7 @@ describe('Key deletion falls back to credits (DB-only)', () => {
       headers: authHeader(accessToken),
       payload: {
         provider: 'anthropic',
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-4-6-20250501',
         messages: [{ role: 'user', content: 'Post-delete test' }],
       },
     });

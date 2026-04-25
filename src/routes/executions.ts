@@ -40,7 +40,7 @@ function createRegistry(): StepHandlerRegistry {
       if (provider === 'claude') {
         const client = new Anthropic({ apiKey });
         const response = await client.messages.create({
-          model: String(config.model ?? 'claude-sonnet-4-20250514'),
+          model: String(config.model ?? 'claude-sonnet-4-6-20250501'),
           max_tokens: Number(config.maxTokens ?? 1024),
           messages: [{ role: 'user', content: prompt }],
         });

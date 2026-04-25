@@ -78,7 +78,7 @@ export default async function chatCompletionsRoute(app: FastifyInstance) {
             .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }));
 
           const response = await client.messages.create({
-            model: model ?? 'claude-sonnet-4-20250514',
+            model: model ?? 'claude-sonnet-4-6-20250501',
             max_tokens: 1024,
             ...(systemMsg ? { system: systemMsg.content } : {}),
             messages: nonSystemMsgs,

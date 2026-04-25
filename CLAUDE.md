@@ -144,7 +144,7 @@ const client = new Anthropic({ apiKey: userApiKey });
 
 // Non-streaming
 const message = await client.messages.create({
-  model: 'claude-sonnet-4-20250514',
+  model: 'claude-sonnet-4-6-20250501',
   max_tokens: 1024,
   system: 'You are helpful.',
   messages: [{ role: 'user', content: 'Hello' }],
@@ -152,7 +152,7 @@ const message = await client.messages.create({
 const text = message.content.filter(b => b.type === 'text').map(b => b.text).join('');
 
 // Streaming
-const stream = client.messages.stream({ model: 'claude-sonnet-4-20250514', max_tokens: 1024, messages });
+const stream = client.messages.stream({ model: 'claude-sonnet-4-6-20250501', max_tokens: 1024, messages });
 for await (const event of stream) {
   if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') yield event.delta.text;
 }

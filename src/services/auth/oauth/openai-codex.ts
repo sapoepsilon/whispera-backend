@@ -1,42 +1,35 @@
 import { randomBytes, createHash } from 'node:crypto';
-
-interface OAuthState {
-  userId: string;
-  codeVerifier: string;
-  createdAt: number;
-}
-
-const pendingStates = new Map<string, OAuthState>();
+import { eq, lt } from 'drizzle-orm';
+import type { Database } from '../../../db/index.js';
+import { oauthStates } from '../../../db/schema/oauth-states.js';
 
 const STATE_TTL_MS = 10 * 60 * 1000;
-
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, state] of pendingStates) {
-    if (now - state.createdAt > STATE_TTL_MS) pendingStates.delete(key);
-  }
-}, STATE_TTL_MS).unref();
 
 export class OpenAICodexOAuthService {
   private readonly clientId: string;
   private readonly redirectUri: string;
+  private readonly db: Database;
 
-  constructor() {
+  constructor(db: Database) {
+    this.db = db;
     this.clientId = process.env.OPENAI_CLIENT_ID || 'whispera-app';
     this.redirectUri = process.env.OPENAI_REDIRECT_URI || 'http://localhost:3000/auth/oauth/openai/callback';
   }
 
-  generateAuthorizationUrl(userId: string): { url: string; state: string } {
+  async generateAuthorizationUrl(userId: string): Promise<{ url: string; state: string }> {
     const state = randomBytes(32).toString('hex');
     const codeVerifier = randomBytes(32).toString('hex');
     const codeChallenge = createHash('sha256')
       .update(codeVerifier)
       .digest('base64url');
 
-    pendingStates.set(state, {
-      userId,
+    const expiresAt = new Date(Date.now() + STATE_TTL_MS);
+
+    await this.db.insert(oauthStates).values({
+      state,
       codeVerifier,
-      createdAt: Date.now(),
+      userId,
+      expiresAt,
     });
 
     const params = new URLSearchParams({
@@ -55,24 +48,20 @@ export class OpenAICodexOAuthService {
     };
   }
 
-  validateState(state: string): OAuthState | null {
-    const pending = pendingStates.get(state);
-    if (!pending) return null;
+  async consumeState(state: string): Promise<{ userId: string; codeVerifier: string } | null> {
+    await this.db.delete(oauthStates).where(lt(oauthStates.expiresAt, new Date()));
 
-    if (Date.now() - pending.createdAt > STATE_TTL_MS) {
-      pendingStates.delete(state);
-      return null;
-    }
+    const [row] = await this.db
+      .select()
+      .from(oauthStates)
+      .where(eq(oauthStates.state, state))
+      .limit(1);
 
-    return pending;
-  }
+    if (!row) return null;
 
-  consumeState(state: string): OAuthState | null {
-    const pending = this.validateState(state);
-    if (pending) {
-      pendingStates.delete(state);
-    }
-    return pending;
+    await this.db.delete(oauthStates).where(eq(oauthStates.state, state));
+
+    return { userId: row.userId, codeVerifier: row.codeVerifier };
   }
 
   async exchangeCodeForTokens(

@@ -1,6 +1,7 @@
 import fp from 'fastify-plugin';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { eq } from 'drizzle-orm';
+import { verifyToken } from '@clerk/backend';
 import { users } from '../db/schema/users.js';
 
 declare module 'fastify' {
@@ -38,7 +39,16 @@ async function authPlugin(fastify: FastifyInstance) {
         }
         clerkId = token;
       } else {
-        clerkId = token;
+        const secretKey = process.env.CLERK_SECRET_KEY;
+        if (!secretKey) {
+          return reply.code(500).send({ error: 'Server misconfigured: missing CLERK_SECRET_KEY' });
+        }
+        try {
+          const payload = await verifyToken(token, { secretKey });
+          clerkId = payload.sub;
+        } catch {
+          return reply.code(401).send({ error: 'Unauthorized' });
+        }
       }
 
       const [existing] = await fastify.db

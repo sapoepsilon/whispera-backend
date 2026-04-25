@@ -42,43 +42,54 @@ export default async function billingCreditsRoutes(app: FastifyInstance) {
     },
   );
 
-  app.post(
-    '/billing/webhooks/stripe',
-    async (request: FastifyRequest, reply: FastifyReply) => {
-      const signature = request.headers['stripe-signature'] as string;
-      if (!signature) {
-        return reply.code(400).send({ error: 'Missing stripe-signature header' });
-      }
+  app.register(async function webhookScope(scope) {
+    scope.addContentTypeParser(
+      'application/json',
+      { parseAs: 'buffer' },
+      (_req: FastifyRequest, body: Buffer, done: (err: null, body: Buffer) => void) => {
+        done(null, body);
+      },
+    );
 
-      let event;
-      try {
-        const rawBody = (request.body as Buffer) ?? '';
-        event = stripeService.validateWebhookSignature(rawBody, signature);
-      } catch {
-        return reply.code(400).send({ error: 'Invalid webhook signature' });
-      }
+    scope.post(
+      '/billing/webhooks/stripe',
+      { config: { rateLimit: false } },
+      async (request: FastifyRequest, reply: FastifyReply) => {
+        const signature = request.headers['stripe-signature'] as string;
+        if (!signature) {
+          return reply.code(400).send({ error: 'Missing stripe-signature header' });
+        }
 
-      if (event.type === 'checkout.session.completed') {
-        const session = event.data.object as {
-          id: string;
-          metadata: { userId: string; packageId: string } | null;
-        };
+        let event;
+        try {
+          const rawBody = request.body as Buffer;
+          event = stripeService.validateWebhookSignature(rawBody, signature);
+        } catch {
+          return reply.code(400).send({ error: 'Invalid webhook signature' });
+        }
 
-        const userId = session.metadata?.userId;
-        const packageId = session.metadata?.packageId;
+        if (event.type === 'checkout.session.completed') {
+          const session = event.data.object as {
+            id: string;
+            metadata: { userId: string; packageId: string } | null;
+          };
 
-        if (userId && packageId) {
-          const alreadyProcessed = await creditService.hasProcessedSession(session.id);
-          if (!alreadyProcessed) {
-            const pkg = CREDIT_PACKAGES[packageId];
-            if (pkg) {
-              await creditService.addCredits(userId, pkg.credits, session.id);
+          const userId = session.metadata?.userId;
+          const packageId = session.metadata?.packageId;
+
+          if (userId && packageId) {
+            const alreadyProcessed = await creditService.hasProcessedSession(session.id);
+            if (!alreadyProcessed) {
+              const pkg = CREDIT_PACKAGES[packageId];
+              if (pkg) {
+                await creditService.addCredits(userId, pkg.credits, session.id);
+              }
             }
           }
         }
-      }
 
-      return reply.code(200).send({ received: true });
-    },
-  );
+        return reply.code(200).send({ received: true });
+      },
+    );
+  });
 }

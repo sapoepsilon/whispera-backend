@@ -24,7 +24,7 @@ function validateApiKey(provider: string, key: string): boolean {
 export default async function apiKeysRoutes(app: FastifyInstance) {
   app.post(
     '/auth/api-keys',
-    { preHandler: [app.authenticate] },
+    { preHandler: [app.authenticate], config: { rateLimit: { max: 20, timeWindow: '1 minute' } } },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const result = addKeySchema.safeParse(request.body);
       if (!result.success) {
@@ -60,7 +60,7 @@ export default async function apiKeysRoutes(app: FastifyInstance) {
 
   app.get(
     '/auth/api-keys',
-    { preHandler: [app.authenticate] },
+    { preHandler: [app.authenticate], config: { rateLimit: { max: 20, timeWindow: '1 minute' } } },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const keys = await app.db
         .select({
@@ -78,7 +78,7 @@ export default async function apiKeysRoutes(app: FastifyInstance) {
 
   app.delete<{ Params: { id: string } }>(
     '/auth/api-keys/:id',
-    { preHandler: [app.authenticate] },
+    { preHandler: [app.authenticate], config: { rateLimit: { max: 20, timeWindow: '1 minute' } } },
     async (request, reply) => {
       const { id } = request.params;
 

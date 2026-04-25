@@ -6,7 +6,7 @@ export default async function transcribeRoute(app: FastifyInstance) {
 
   app.post(
     '/transcribe',
-    { preHandler: [app.authenticate] },
+    { preHandler: [app.authenticate], config: { rateLimit: { max: 10, timeWindow: '1 minute' } } },
     async (request: FastifyRequest, reply: FastifyReply) => {
       let file;
       let language: string | undefined;

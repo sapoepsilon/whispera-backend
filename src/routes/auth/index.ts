@@ -5,7 +5,7 @@ import { users } from '../../db/schema/users.js';
 export default async function authRoutes(app: FastifyInstance) {
   app.get(
     '/auth/me',
-    { preHandler: [app.authenticate] },
+    { preHandler: [app.authenticate], config: { rateLimit: { max: 20, timeWindow: '1 minute' } } },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const [user] = await app.db
         .select({

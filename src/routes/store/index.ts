@@ -26,6 +26,11 @@ const publishSchema = z.object({
     .default([]),
 });
 
+const reviewSchema = z.object({
+  rating: z.number().int().min(1).max(5),
+  comment: z.string().max(2000).optional(),
+});
+
 export default async function storeRoutes(app: FastifyInstance) {
   const service = new StoreService(app.db);
 
@@ -102,13 +107,18 @@ export default async function storeRoutes(app: FastifyInstance) {
     },
   );
 
-  app.post<{ Params: { id: string }; Body: { rating: number; comment?: string } }>(
+  app.post<{ Params: { id: string } }>(
     '/store/:id/reviews',
     { preHandler: [app.authenticate] },
     async (request, reply) => {
       const { id } = request.params;
-      const { rating, comment } = request.body;
 
+      const result = reviewSchema.safeParse(request.body);
+      if (!result.success) {
+        return reply.code(400).send({ error: 'Validation failed', details: result.error.issues });
+      }
+
+      const { rating, comment } = result.data;
       const review = await service.addReview(id, request.userId, rating, comment);
       return reply.code(201).send(review);
     },

@@ -1,5 +1,6 @@
 import fp from 'fastify-plugin';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { PROVIDERS } from '../types/index.js';
 import type { ProviderName } from '../types/index.js';
 
 export type KeySource = 'byok' | 'codex-oauth' | 'credits';
@@ -24,7 +25,11 @@ async function providerKeyPlugin(fastify: FastifyInstance) {
 
   fastify.addHook('onRequest', async (request: FastifyRequest) => {
     const key = request.headers['x-provider-key'] as string | undefined;
-    const providerOverride = request.headers['x-provider'] as string | undefined;
+    let providerOverride = request.headers['x-provider'] as string | undefined;
+
+    if (providerOverride && !PROVIDERS.includes(providerOverride as ProviderName)) {
+      providerOverride = undefined;
+    }
 
     if (key) {
       request.providerKey = key;

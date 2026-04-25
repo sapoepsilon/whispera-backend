@@ -143,29 +143,45 @@ export default async function executionRoutes(app: FastifyInstance) {
           Connection: 'keep-alive',
         });
 
-        const write = (event: string, data: unknown) => {
-          reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+        const safeSend = (event: string, data: unknown) => {
+          try {
+            if (!request.raw.destroyed) {
+              reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+            }
+          } catch {}
         };
 
-        await runPipeline(
-          ctx,
-          registry,
-          steps,
-          input,
-          (index, name) => {
-            write('step:start', { stepIndex: index, stepName: name });
-          },
-          (index, name, output) => {
-            write('step:complete', {
-              stepIndex: index,
-              stepName: name,
-              output,
-            });
-          },
-        );
+        request.raw.on('close', () => {
+          ctx.abort();
+        });
+
+        const timeout = setTimeout(() => {
+          ctx.abort();
+        }, 5 * 60 * 1000);
+
+        try {
+          await runPipeline(
+            ctx,
+            registry,
+            steps,
+            input,
+            (index, name) => {
+              safeSend('step:start', { stepIndex: index, stepName: name });
+            },
+            (index, name, output) => {
+              safeSend('step:complete', {
+                stepIndex: index,
+                stepName: name,
+                output,
+              });
+            },
+          );
+        } finally {
+          clearTimeout(timeout);
+        }
 
         const snapshot = ctx.toJSON();
-        write('execution:complete', {
+        safeSend('execution:complete', {
           executionId: snapshot.executionId,
           status: snapshot.status,
         });

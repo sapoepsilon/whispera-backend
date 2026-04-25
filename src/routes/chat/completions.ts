@@ -1,16 +1,23 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { eq, and } from 'drizzle-orm';
+import { z } from 'zod';
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 import { apiKeys } from '../../db/schema/api-keys.js';
 import { OAuthConnectionService } from '../../services/auth/oauth/connection.js';
 import { decrypt } from '../../services/crypto/index.js';
 
-interface CompletionBody {
-  messages: Array<{ role: string; content: string }>;
-  provider?: string;
-  model?: string;
-}
+const completionBodySchema = z.object({
+  messages: z.array(z.object({
+    role: z.enum(['system', 'user', 'assistant']),
+    content: z.string().max(100000),
+  })).min(1),
+  provider: z.enum(['claude', 'anthropic', 'openai']).optional(),
+  model: z.string().max(100).optional(),
+  stream: z.boolean().optional(),
+});
+
+type CompletionBody = z.infer<typeof completionBodySchema>;
 
 function isClaudeProvider(provider: string): boolean {
   return provider === 'claude' || provider === 'anthropic';
@@ -19,9 +26,10 @@ function isClaudeProvider(provider: string): boolean {
 export default async function chatCompletionsRoute(app: FastifyInstance) {
   app.post<{ Body: CompletionBody }>(
     '/chat/completions',
-    { preHandler: [app.authenticate] },
+    { preHandler: [app.authenticate], config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
     async (request, reply) => {
-      const { messages, provider: bodyProvider, model } = request.body;
+      const parsed = completionBodySchema.parse(request.body);
+      const { messages, provider: bodyProvider, model } = parsed;
       const headerProviderKey = request.providerKey;
       let keySource = request.keySource;
       let resolvedKey: string | null = headerProviderKey;

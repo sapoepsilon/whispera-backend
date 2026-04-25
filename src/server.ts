@@ -1,6 +1,8 @@
 import Fastify from 'fastify';
+import type { FastifyError } from 'fastify';
 import fastifyEnv from '@fastify/env';
 import fastifySensible from '@fastify/sensible';
+import { ZodError } from 'zod';
 import { fileURLToPath } from 'node:url';
 import { envSchema } from './config/env.js';
 import type { EnvConfig } from './config/env.js';
@@ -27,13 +29,22 @@ export async function buildApp() {
   await app.register(fastifyEnv, { schema: envSchema, dotenv: true });
   await app.register(fastifySensible);
 
+  await app.register(import('@fastify/cors'), {
+    origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+    credentials: true,
+  });
+
+  await app.register(import('@fastify/helmet'), {
+    contentSecurityPolicy: false,
+  });
+
   const { default: dbPlugin } = await import('./plugins/db.js');
   await app.register(dbPlugin);
 
   if (process.env.NODE_ENV === 'test' && !_testTruncated) {
     _testTruncated = true;
     const { sql } = await import('drizzle-orm');
-    await app.db.execute(sql`TRUNCATE users, recipes, executions, store_recipes, store_reviews, oauth_connections, credit_balances, credit_transactions, api_keys CASCADE`).catch((_e: unknown) => {});
+    await app.db.execute(sql`TRUNCATE users, recipes, executions, store_recipes, store_reviews, oauth_connections, oauth_states, credit_balances, credit_transactions, api_keys CASCADE`).catch((_e: unknown) => {});
   }
 
   const { default: authPlugin } = await import('./plugins/auth.js');
@@ -42,8 +53,36 @@ export async function buildApp() {
   const { default: providerKeyPlugin } = await import('./plugins/provider-key.js');
   await app.register(providerKeyPlugin);
 
+  const { default: rateLimitPlugin } = await import('./plugins/rate-limit.js');
+  await app.register(rateLimitPlugin);
+
   const multipart = await import('@fastify/multipart');
-  await app.register(multipart.default);
+  await app.register(multipart.default, { limits: { fileSize: 25 * 1024 * 1024 } });
+
+  app.setErrorHandler((error: FastifyError, _request, reply) => {
+    app.log.error(error);
+
+    if (error instanceof ZodError) {
+      return reply.code(400).send({
+        error: 'Validation error',
+        details: error.issues.map((i) => ({ path: i.path, message: i.message })),
+      });
+    }
+
+    const isProduction = process.env.NODE_ENV === 'production';
+    const statusCode = error.statusCode ?? 500;
+
+    if (isProduction) {
+      return reply.code(statusCode).send({
+        error: statusCode >= 500 ? 'Internal Server Error' : error.message,
+      });
+    }
+
+    return reply.code(statusCode).send({
+      error: error.message,
+      stack: error.stack,
+    });
+  });
 
   const { default: healthRoute } = await import('./routes/health.js');
   await app.register(healthRoute);

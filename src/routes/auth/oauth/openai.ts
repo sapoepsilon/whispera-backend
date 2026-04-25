@@ -5,20 +5,21 @@ import { OAuthConnectionService } from '../../../services/auth/oauth/connection.
 import { apiKeys } from '../../../db/schema/api-keys.js';
 
 export default async function openaiOAuthRoutes(app: FastifyInstance) {
-  const oauthService = new OpenAICodexOAuthService();
+  const oauthService = new OpenAICodexOAuthService(app.db);
   const connectionService = new OAuthConnectionService(app.db);
 
   app.get(
     '/auth/oauth/openai',
-    { preHandler: [app.authenticate] },
+    { preHandler: [app.authenticate], config: { rateLimit: { max: 20, timeWindow: '1 minute' } } },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      const { url } = oauthService.generateAuthorizationUrl(request.userId);
+      const { url } = await oauthService.generateAuthorizationUrl(request.userId);
       return reply.code(200).send({ url });
     },
   );
 
   app.get(
     '/auth/oauth/openai/callback',
+    { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } },
     async (request: FastifyRequest<{ Querystring: { code?: string; state?: string } }>, reply: FastifyReply) => {
       const { code, state } = request.query as { code?: string; state?: string };
       const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
@@ -27,7 +28,7 @@ export default async function openaiOAuthRoutes(app: FastifyInstance) {
         return reply.redirect(`${frontendUrl}/settings?status=error&message=missing_params`);
       }
 
-      const pending = oauthService.consumeState(state);
+      const pending = await oauthService.consumeState(state);
       if (!pending) {
         return reply.redirect(`${frontendUrl}/settings?status=error&message=invalid_state`);
       }
@@ -52,7 +53,7 @@ export default async function openaiOAuthRoutes(app: FastifyInstance) {
 
   app.delete(
     '/auth/oauth/openai',
-    { preHandler: [app.authenticate] },
+    { preHandler: [app.authenticate], config: { rateLimit: { max: 20, timeWindow: '1 minute' } } },
     async (request: FastifyRequest, reply: FastifyReply) => {
       await connectionService.deleteConnection(request.userId, 'openai');
       await app.db

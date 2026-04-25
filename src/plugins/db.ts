@@ -22,7 +22,7 @@ async function dbPlugin(fastify: FastifyInstance) {
 
     await setupClient`CREATE SCHEMA IF NOT EXISTS ${setupClient(schemaName)}`;
 
-    const tables = ['users', 'recipes', 'executions', 'store_recipes', 'store_reviews', 'oauth_connections', 'credit_balances', 'credit_transactions', 'api_keys'];
+    const tables = ['users', 'recipes', 'executions', 'store_recipes', 'store_reviews', 'oauth_connections', 'oauth_states', 'credit_balances', 'credit_transactions', 'api_keys'];
     for (const table of tables) {
       await setupClient.unsafe(`CREATE TABLE IF NOT EXISTS ${schemaName}.${table} (LIKE public.${table} INCLUDING DEFAULTS INCLUDING CONSTRAINTS)`).catch(() => {});
     }

@@ -21,7 +21,7 @@ export default defineConfig({
     env: {
       PORT: '3000',
       HOST: '0.0.0.0',
-      DATABASE_URL: 'postgresql://whispera:whispera_secret@localhost:5432/whispera_test',
+      DATABASE_URL: 'postgresql://whispera:whispera@localhost:5432/whispera',
       JWT_SECRET: 'test-jwt-secret-that-is-at-least-32-characters-long',
       NODE_ENV: 'test',
       ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',

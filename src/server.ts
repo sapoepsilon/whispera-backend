@@ -29,6 +29,9 @@ export async function buildApp() {
   await app.register(fastifyEnv, { schema: envSchema, dotenv: true });
   await app.register(fastifySensible);
 
+  const { default: swaggerPlugin } = await import('./plugins/swagger.js');
+  await app.register(swaggerPlugin);
+
   await app.register(import('@fastify/cors'), {
     origin: process.env.FRONTEND_URL || 'http://localhost:5173',
     credentials: true,

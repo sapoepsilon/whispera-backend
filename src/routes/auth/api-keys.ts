@@ -1,14 +1,33 @@
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { eq, and } from 'drizzle-orm';
 import { apiKeys } from '../../db/schema/api-keys.js';
 import { encrypt } from '../../services/crypto/index.js';
-import { UUID_REGEX } from '../../utils/validation.js';
 
-const addKeySchema = z.object({
+const addKeyBodySchema = z.object({
   provider: z.enum(['claude', 'anthropic', 'openai']),
   key: z.string().min(1),
   label: z.string().optional(),
+});
+
+const apiKeyResponseSchema = z.object({
+  id: z.string().uuid(),
+  provider: z.string(),
+  label: z.string().nullable(),
+  createdAt: z.date(),
+});
+
+const listKeysResponseSchema = z.object({
+  keys: z.array(apiKeyResponseSchema),
+});
+
+const errorSchema = z.object({
+  error: z.string(),
+  details: z.array(z.unknown()).optional(),
+});
+
+const idParamsSchema = z.object({
+  id: z.string().uuid(),
 });
 
 function validateApiKey(provider: string, key: string): boolean {
@@ -24,14 +43,26 @@ function validateApiKey(provider: string, key: string): boolean {
 export default async function apiKeysRoutes(app: FastifyInstance) {
   app.post(
     '/auth/api-keys',
-    { preHandler: [app.authenticate], config: { rateLimit: { max: 20, timeWindow: '1 minute' } } },
-    async (request: FastifyRequest, reply: FastifyReply) => {
-      const result = addKeySchema.safeParse(request.body);
-      if (!result.success) {
-        return reply.code(400).send({ error: 'Validation failed', details: result.error.issues });
-      }
-
-      const { provider, key, label } = result.data;
+    {
+      preHandler: [app.authenticate],
+      config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+      schema: {
+        tags: ['api-keys'],
+        summary: 'Store a BYOK provider key',
+        description:
+          'Encrypts and stores a user-supplied OpenAI/Anthropic API key. ' +
+          'The plaintext value is never returned in subsequent reads.',
+        security: [{ bearerAuth: [] }],
+        body: addKeyBodySchema,
+        response: {
+          201: apiKeyResponseSchema,
+          400: errorSchema,
+          422: errorSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const { provider, key, label } = request.body as z.infer<typeof addKeyBodySchema>;
 
       if (!validateApiKey(provider, key)) {
         return reply.code(422).send({ error: 'Invalid API key format for provider' });
@@ -60,8 +91,17 @@ export default async function apiKeysRoutes(app: FastifyInstance) {
 
   app.get(
     '/auth/api-keys',
-    { preHandler: [app.authenticate], config: { rateLimit: { max: 20, timeWindow: '1 minute' } } },
-    async (request: FastifyRequest, reply: FastifyReply) => {
+    {
+      preHandler: [app.authenticate],
+      config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+      schema: {
+        tags: ['api-keys'],
+        summary: 'List stored BYOK keys (metadata only)',
+        security: [{ bearerAuth: [] }],
+        response: { 200: listKeysResponseSchema },
+      },
+    },
+    async (request, reply) => {
       const keys = await app.db
         .select({
           id: apiKeys.id,
@@ -76,15 +116,24 @@ export default async function apiKeysRoutes(app: FastifyInstance) {
     },
   );
 
-  app.delete<{ Params: { id: string } }>(
+  app.delete(
     '/auth/api-keys/:id',
-    { preHandler: [app.authenticate], config: { rateLimit: { max: 20, timeWindow: '1 minute' } } },
+    {
+      preHandler: [app.authenticate],
+      config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+      schema: {
+        tags: ['api-keys'],
+        summary: 'Delete a stored BYOK key',
+        security: [{ bearerAuth: [] }],
+        params: idParamsSchema,
+        response: {
+          204: z.null(),
+          404: errorSchema,
+        },
+      },
+    },
     async (request, reply) => {
-      const { id } = request.params;
-
-      if (!UUID_REGEX.test(id)) {
-        return reply.code(400).send({ error: 'Invalid key ID' });
-      }
+      const { id } = request.params as z.infer<typeof idParamsSchema>;
 
       const [deleted] = await app.db
         .delete(apiKeys)

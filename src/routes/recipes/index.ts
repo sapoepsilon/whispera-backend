@@ -1,7 +1,6 @@
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { RecipeService } from '../../services/recipes/index.js';
-import { UUID_REGEX } from '../../utils/validation.js';
 import { STEP_TYPES } from '../../types/index.js';
 
 const stepSchema = z.object({
@@ -10,7 +9,7 @@ const stepSchema = z.object({
   name: z.string().optional(),
 });
 
-const createRecipeSchema = z.object({
+const createRecipeBodySchema = z.object({
   name: z.string().min(1),
   description: z.string().nullable().optional(),
   triggerPhrase: z.string().nullable().optional(),
@@ -21,7 +20,7 @@ const createRecipeSchema = z.object({
   isPublic: z.boolean().optional().default(false),
 });
 
-const updateRecipeSchema = z.object({
+const updateRecipeBodySchema = z.object({
   name: z.string().min(1).optional(),
   description: z.string().nullable().optional(),
   triggerPhrase: z.string().nullable().optional(),
@@ -38,64 +37,118 @@ const listQuerySchema = z.object({
   search: z.string().optional(),
 });
 
+const recipeResponseSchema = z.object({
+  id: z.string().uuid(),
+  userId: z.string().uuid(),
+  name: z.string(),
+  description: z.string().nullable(),
+  triggerPhrase: z.string().nullable(),
+  steps: z.array(stepSchema),
+  integrations: z.record(z.string(), z.any()).nullable(),
+  permissions: z.record(z.string(), z.any()).nullable(),
+  outputFormat: z.string(),
+  isPublic: z.boolean(),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+  deletedAt: z.date().nullable(),
+});
+
+const listRecipesResponseSchema = z.object({
+  data: z.array(recipeResponseSchema),
+  pagination: z.object({
+    page: z.number(),
+    limit: z.number(),
+    total: z.number(),
+  }),
+});
+
+const errorSchema = z.object({
+  error: z.string(),
+  details: z.array(z.unknown()).optional(),
+});
+
+const idParamsSchema = z.object({
+  id: z.string().uuid(),
+});
+
 export default async function recipesRoutes(app: FastifyInstance) {
   const service = new RecipeService(app.db);
 
   app.post(
     '/recipes',
-    { preHandler: [app.authenticate] },
-    async (request: FastifyRequest, reply: FastifyReply) => {
-      const result = createRecipeSchema.safeParse(request.body);
-      if (!result.success) {
-        return reply.code(400).send({ error: 'Validation failed', details: result.error.issues });
-      }
-
+    {
+      preHandler: [app.authenticate],
+      schema: {
+        tags: ['recipes'],
+        summary: 'Create a recipe',
+        description: 'Creates a new recipe owned by the authenticated user.',
+        security: [{ bearerAuth: [] }],
+        body: createRecipeBodySchema,
+        response: {
+          201: recipeResponseSchema,
+          400: errorSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const data = request.body as z.infer<typeof createRecipeBodySchema>;
       const recipe = await service.create({
-        ...result.data,
+        ...data,
         userId: request.userId,
       });
-
       return reply.code(201).send(recipe);
     },
   );
 
   app.get(
     '/recipes',
-    { preHandler: [app.authenticate] },
-    async (request: FastifyRequest, reply: FastifyReply) => {
-      const result = listQuerySchema.safeParse(request.query);
-      if (!result.success) {
-        return reply.code(400).send({ error: 'Validation failed', details: result.error.issues });
-      }
-
-      const { page, limit, search } = result.data;
+    {
+      preHandler: [app.authenticate],
+      schema: {
+        tags: ['recipes'],
+        summary: 'List the caller’s recipes (paginated)',
+        security: [{ bearerAuth: [] }],
+        querystring: listQuerySchema,
+        response: { 200: listRecipesResponseSchema },
+      },
+    },
+    async (request, reply) => {
+      const { page, limit, search } = request.query as z.infer<typeof listQuerySchema>;
       const list = await service.listByUser(request.userId, { page, limit, search });
-
       return reply.code(200).send(list);
     },
   );
 
-  app.put<{ Params: { id: string } }>(
+  app.put(
     '/recipes/:id',
-    { preHandler: [app.authenticate] },
+    {
+      preHandler: [app.authenticate],
+      schema: {
+        tags: ['recipes'],
+        summary: 'Update a recipe',
+        security: [{ bearerAuth: [] }],
+        params: idParamsSchema,
+        body: updateRecipeBodySchema,
+        response: {
+          200: recipeResponseSchema,
+          400: errorSchema,
+          404: errorSchema,
+        },
+      },
+    },
     async (request, reply) => {
-      const { id } = request.params;
-
-      if (!UUID_REGEX.test(id)) {
-        return reply.code(400).send({ error: 'Invalid recipe ID' });
-      }
-
+      const { id } = request.params as z.infer<typeof idParamsSchema>;
       const body = request.body as Record<string, unknown> | null;
+
       if (!body || Object.keys(body).length === 0) {
         return reply.code(400).send({ error: 'Request body cannot be empty' });
       }
 
-      const result = updateRecipeSchema.safeParse(body);
-      if (!result.success) {
-        return reply.code(400).send({ error: 'Validation failed', details: result.error.issues });
-      }
-
-      const updated = await service.update(id, request.userId, result.data);
+      const updated = await service.update(
+        id,
+        request.userId,
+        body as z.infer<typeof updateRecipeBodySchema>,
+      );
       if (!updated) {
         return reply.code(404).send({ error: 'Recipe not found' });
       }
@@ -104,21 +157,27 @@ export default async function recipesRoutes(app: FastifyInstance) {
     },
   );
 
-  app.delete<{ Params: { id: string } }>(
+  app.delete(
     '/recipes/:id',
-    { preHandler: [app.authenticate] },
+    {
+      preHandler: [app.authenticate],
+      schema: {
+        tags: ['recipes'],
+        summary: 'Soft-delete a recipe',
+        security: [{ bearerAuth: [] }],
+        params: idParamsSchema,
+        response: {
+          204: z.null(),
+          404: errorSchema,
+        },
+      },
+    },
     async (request, reply) => {
-      const { id } = request.params;
-
-      if (!UUID_REGEX.test(id)) {
-        return reply.code(400).send({ error: 'Invalid recipe ID' });
-      }
-
+      const { id } = request.params as z.infer<typeof idParamsSchema>;
       const deleted = await service.softDelete(id, request.userId);
       if (!deleted) {
         return reply.code(404).send({ error: 'Recipe not found' });
       }
-
       return reply.code(204).send();
     },
   );

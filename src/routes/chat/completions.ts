@@ -18,6 +18,33 @@ const completionBodySchema = z.object({
   stream: z.boolean().optional(),
 });
 
+const completionResponseSchema = z.object({
+  keySource: z.string(),
+  provider: z.string(),
+  choices: z
+    .array(
+      z.object({
+        message: z.object({
+          role: z.string(),
+          content: z.string(),
+        }),
+      }),
+    )
+    .optional(),
+  usage: z
+    .object({
+      prompt_tokens: z.number().optional(),
+      completion_tokens: z.number().optional(),
+    })
+    .optional(),
+});
+
+const errorSchema = z.object({
+  error: z.string(),
+  keySource: z.string().optional(),
+  provider: z.string().optional(),
+});
+
 type CompletionBody = z.infer<typeof completionBodySchema>;
 
 function isClaudeProvider(provider: string): boolean {
@@ -25,12 +52,30 @@ function isClaudeProvider(provider: string): boolean {
 }
 
 export default async function chatCompletionsRoute(app: FastifyInstance) {
-  app.post<{ Body: CompletionBody }>(
+  app.post(
     '/chat/completions',
-    { preHandler: [app.authenticate], config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
+    {
+      preHandler: [app.authenticate],
+      config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+      schema: {
+        tags: ['chat'],
+        summary: 'Direct LLM chat completion',
+        description:
+          'Sends `messages` to an LLM provider. Resolves the key in this order: ' +
+          '`X-Provider-Key` header (BYOK pass-through, never stored) → encrypted key from /auth/api-keys → ' +
+          'OpenAI Codex OAuth → platform key + credits. Default model: gpt-4o (OpenAI) or claude-sonnet-4-6-20250501 (Anthropic).',
+        security: [{ bearerAuth: [] }, { bearerAuth: [], providerKey: [] }],
+        body: completionBodySchema,
+        response: {
+          200: completionResponseSchema,
+          401: errorSchema,
+          402: errorSchema,
+          403: errorSchema,
+        },
+      },
+    },
     async (request, reply) => {
-      const parsed = completionBodySchema.parse(request.body);
-      const { messages, provider: bodyProvider, model } = parsed;
+      const { messages, provider: bodyProvider, model } = request.body as CompletionBody;
       const headerProviderKey = request.providerKey;
       let keySource = request.keySource;
       let resolvedKey: string | null = headerProviderKey;

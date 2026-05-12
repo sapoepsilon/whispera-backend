@@ -8,9 +8,8 @@ import { ExecutionService } from '../services/execution.service.js';
 import { ExecutionContext } from '../services/pipeline/context.js';
 import { StepHandlerRegistry } from '../services/pipeline/registry.js';
 import type { StepType } from '../services/pipeline/types.js';
-import { UUID_REGEX } from '../utils/validation.js';
 
-const executeSchema = z.object({
+const executeBodySchema = z.object({
   input: z.string().optional().default(''),
   stream: z.boolean().optional().default(false),
   variables: z.record(z.string(), z.unknown()).optional(),
@@ -19,6 +18,15 @@ const executeSchema = z.object({
 const listQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(100).default(20),
+});
+
+const idParamsSchema = z.object({
+  id: z.string().uuid(),
+});
+
+const errorSchema = z.object({
+  error: z.string(),
+  details: z.array(z.unknown()).optional(),
 });
 
 function createRegistry(): StepHandlerRegistry {
@@ -94,30 +102,32 @@ export default async function executionRoutes(app: FastifyInstance) {
   const executionService = new ExecutionService(app.db);
   const registry = createRegistry();
 
-  app.post<{ Params: { id: string } }>(
+  app.post(
     '/recipes/:id/execute',
-    { preHandler: [app.authenticate] },
+    {
+      preHandler: [app.authenticate],
+      schema: {
+        tags: ['executions'],
+        summary: 'Execute a recipe pipeline',
+        description:
+          'Runs the recipe step-by-step. When `stream: true`, the response is a Server-Sent Events ' +
+          'stream with `step:start`, `step:complete`, and `execution:complete` events. Otherwise ' +
+          'returns a JSON snapshot of the final execution.',
+        security: [{ bearerAuth: [] }],
+        params: idParamsSchema,
+        body: executeBodySchema,
+        response: { 404: errorSchema, default: z.unknown() },
+      },
+    },
     async (request, reply) => {
-      const { id } = request.params;
-
-      if (!UUID_REGEX.test(id)) {
-        return reply.code(400).send({ error: 'Invalid recipe ID' });
-      }
+      const { id } = request.params as z.infer<typeof idParamsSchema>;
 
       const recipe = await recipeService.findByIdAndUser(id, request.userId);
       if (!recipe) {
         return reply.code(404).send({ error: 'Recipe not found' });
       }
 
-      const result = executeSchema.safeParse(request.body);
-      if (!result.success) {
-        return reply.code(400).send({
-          error: 'Validation failed',
-          details: result.error.issues,
-        });
-      }
-
-      const { input, stream, variables } = result.data;
+      const { input, stream, variables } = request.body as z.infer<typeof executeBodySchema>;
       const steps = recipe.steps as Array<{
         type: string;
         name: string;
@@ -228,30 +238,28 @@ export default async function executionRoutes(app: FastifyInstance) {
     },
   );
 
-  app.get<{ Params: { id: string } }>(
+  app.get(
     '/recipes/:id/executions',
-    { preHandler: [app.authenticate] },
+    {
+      preHandler: [app.authenticate],
+      schema: {
+        tags: ['executions'],
+        summary: 'List executions for a recipe',
+        security: [{ bearerAuth: [] }],
+        params: idParamsSchema,
+        querystring: listQuerySchema,
+        response: { 404: errorSchema, default: z.unknown() },
+      },
+    },
     async (request, reply) => {
-      const { id } = request.params;
-
-      if (!UUID_REGEX.test(id)) {
-        return reply.code(400).send({ error: 'Invalid recipe ID' });
-      }
+      const { id } = request.params as z.infer<typeof idParamsSchema>;
 
       const recipe = await recipeService.findByIdAndUser(id, request.userId);
       if (!recipe) {
         return reply.code(404).send({ error: 'Recipe not found' });
       }
 
-      const queryResult = listQuerySchema.safeParse(request.query);
-      if (!queryResult.success) {
-        return reply.code(400).send({
-          error: 'Validation failed',
-          details: queryResult.error.issues,
-        });
-      }
-
-      const { page, limit } = queryResult.data;
+      const { page, limit } = request.query as z.infer<typeof listQuerySchema>;
       const list = await executionService.listByRecipe(id, request.userId, {
         page,
         limit,
@@ -261,15 +269,20 @@ export default async function executionRoutes(app: FastifyInstance) {
     },
   );
 
-  app.get<{ Params: { id: string } }>(
+  app.get(
     '/executions/:id',
-    { preHandler: [app.authenticate] },
+    {
+      preHandler: [app.authenticate],
+      schema: {
+        tags: ['executions'],
+        summary: 'Get a single execution by ID',
+        security: [{ bearerAuth: [] }],
+        params: idParamsSchema,
+        response: { 404: errorSchema, default: z.unknown() },
+      },
+    },
     async (request, reply) => {
-      const { id } = request.params;
-
-      if (!UUID_REGEX.test(id)) {
-        return reply.code(400).send({ error: 'Invalid execution ID' });
-      }
+      const { id } = request.params as z.infer<typeof idParamsSchema>;
 
       const execution = await executionService.getByIdAndUserId(
         id,

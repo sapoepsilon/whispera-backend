@@ -1,0 +1,83 @@
+# Whispera Backend
+
+> Voice-to-action backend service. Users speak; transcription happens on-device (Mac/iOS); this backend runs prompt recipes (multi-step LLM pipelines) against Claude and OpenAI, with per-request BYOK and a credits/Stripe fallback.
+
+The full OpenAPI 3.1 specification is auto-generated from Zod schemas and served at `/docs/json` when the server is running. An interactive Swagger UI is at `/docs`.
+
+## Architecture (one-paragraph summary)
+
+Node 20 + TypeScript (ESM, strict). Fastify 5 with manual route registration in `src/server.ts`. PostgreSQL 16 via Drizzle ORM (postgres-js driver). Auth via Clerk JWT (`@clerk/backend`). LLM access via the Vercel AI SDK (`ai` + `@ai-sdk/openai` + `@ai-sdk/anthropic`) with `generateText` and `experimental_transcribe`. Per-request BYOK is implemented by calling `createOpenAI({ apiKey })` / `createAnthropic({ apiKey })` inside each handler. Pipelines are executed by a hand-rolled sequential `PipelineExecutor`.
+
+## Endpoints (client-facing)
+
+### Health
+- `GET /health` — liveness, returns `{ status, timestamp, version }`.
+
+### Auth (Clerk-backed)
+- `GET /auth/me` — current user record. Requires `Authorization: Bearer <clerk JWT>`.
+
+### BYOK key management
+- `POST /auth/api-keys` — store an encrypted OpenAI/Anthropic key. Body: `{ provider, key, label? }`. Provider is `openai` | `anthropic` | `claude`.
+- `GET /auth/api-keys` — list metadata (no plaintext) for the caller's stored keys.
+- `DELETE /auth/api-keys/:id` — remove a stored key.
+
+### Recipes (CRUD)
+- `POST /recipes` — create a recipe. Body: `{ name, steps[], description?, triggerPhrase?, outputFormat?, isPublic? }`.
+- `GET /recipes` — paginated list. Query: `page`, `limit`, `search`.
+- `PUT /recipes/:id` — partial update.
+- `DELETE /recipes/:id` — soft delete.
+
+### Executions
+- `POST /recipes/:id/execute` — run a recipe pipeline. Body: `{ input?, stream?, variables? }`.
+  - When `stream: true`, the response is a Server-Sent Events stream emitting `step:start`, `step:complete`, and `execution:complete` events.
+  - Otherwise, a JSON snapshot is returned.
+- `GET /recipes/:id/executions` — list executions for a recipe (paginated).
+- `GET /executions/:id` — fetch a single execution.
+
+### Chat (direct LLM)
+- `POST /chat/completions` — direct LLM chat. Body: `{ messages[], provider?, model?, stream? }`. Key resolution order: `X-Provider-Key` header (pass-through BYOK, never stored) → encrypted key from `/auth/api-keys` → OpenAI Codex OAuth → platform key + credits.
+  - Default model: `gpt-4o` (OpenAI), `claude-sonnet-4-6-20250501` (Anthropic).
+
+### Transcribe
+- `POST /transcribe` — Whisper audio transcription. `multipart/form-data` with a file field and optional `language` text field. Returns `{ text, language, duration, provider }`. Backed by `openai.transcription('whisper-1')` via the AI SDK.
+
+### Store, billing, OAuth (less commonly wired by clients)
+- `/store/*` — public recipe store (browse, publish, install).
+- `/billing/credits` — credit balance lookup; `/billing/webhooks/stripe` — Stripe webhook (server-to-server, signature-verified).
+- `/auth/oauth/openai/*` — OpenAI Codex OAuth flow ("Sign in with ChatGPT") via PKCE.
+
+## Authentication
+
+All non-health endpoints require `Authorization: Bearer <token>`. In production, the token is a Clerk-issued JWT verified via `@clerk/backend`. In test mode, the token is treated as a raw clerk-id string and the user is JIT-created. See `src/plugins/auth.ts`.
+
+## BYOK headers
+
+For `/chat/completions`, clients may send `X-Provider-Key: <sk-... | sk-ant-...>` to bypass any stored key. The backend forwards this directly to the provider and **never persists it**. See `src/plugins/provider-key.ts` and `src/routes/chat/completions.ts`.
+
+## SSE streaming
+
+Recipe execution with `stream: true` uses `reply.hijack()` and writes raw SSE frames. Each frame is `event: <name>\ndata: <json>\n\n`. The connection ends on `execution:complete` or on client disconnect.
+
+## Reading the OpenAPI spec
+
+```bash
+# Live (server must be running)
+curl http://localhost:3000/docs/json
+
+# Interactive UI
+open http://localhost:3000/docs
+```
+
+The OpenAPI document is regenerated on every server start from the route schemas defined inline in `src/routes/`. There is no separate hand-maintained spec.
+
+## Resources
+
+- [Repository (GitHub)](https://github.com/sapoepsilon/whispera-backend)
+- [CLAUDE.md](https://github.com/sapoepsilon/whispera-backend/blob/main/CLAUDE.md) — architecture and conventions for contributors and AI tools.
+- [src/routes/](https://github.com/sapoepsilon/whispera-backend/tree/main/src/routes) — all route handlers with inline Zod schemas.
+- [src/db/schema/](https://github.com/sapoepsilon/whispera-backend/tree/main/src/db/schema) — Drizzle table definitions.
+
+## Optional
+
+- The Mac/iOS Whispera client is in a separate repo and integrates with this backend over HTTPS.
+- Provider keys for local development are intentionally not in this repo. Use `.env` with `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` for E2E tests.

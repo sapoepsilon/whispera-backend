@@ -1,8 +1,9 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { eq, and } from 'drizzle-orm';
 import { z } from 'zod';
-import Anthropic from '@anthropic-ai/sdk';
-import OpenAI from 'openai';
+import { generateText, APICallError, type ModelMessage } from 'ai';
+import { createAnthropic } from '@ai-sdk/anthropic';
+import { createOpenAI } from '@ai-sdk/openai';
 import { apiKeys } from '../../db/schema/api-keys.js';
 import { OAuthConnectionService } from '../../services/auth/oauth/connection.js';
 import { decrypt } from '../../services/crypto/index.js';
@@ -78,61 +79,34 @@ export default async function chatCompletionsRoute(app: FastifyInstance) {
       }
 
       try {
-        if (isClaudeProvider(provider)) {
-          const client = new Anthropic({ apiKey: resolvedKey! });
-          const systemMsg = messages.find((m) => m.role === 'system');
-          const nonSystemMsgs = messages
-            .filter((m) => m.role !== 'system')
-            .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }));
+        const systemMsg = messages.find((m) => m.role === 'system');
+        const nonSystemMsgs: ModelMessage[] = messages
+          .filter((m) => m.role !== 'system')
+          .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }));
 
-          const response = await client.messages.create({
-            model: model ?? 'claude-sonnet-4-6-20250501',
-            max_tokens: 1024,
-            ...(systemMsg ? { system: systemMsg.content } : {}),
-            messages: nonSystemMsgs,
-          });
+        const languageModel = isClaudeProvider(provider)
+          ? createAnthropic({ apiKey: resolvedKey! })(model ?? 'claude-sonnet-4-6-20250501')
+          : createOpenAI({ apiKey: resolvedKey! })(model ?? 'gpt-4o');
 
-          const text = response.content
-            .filter((b) => b.type === 'text')
-            .map((b) => b.text)
-            .join('');
-
-          return reply.code(200).send({
-            keySource,
-            provider,
-            choices: [{ message: { role: 'assistant', content: text } }],
-            usage: {
-              prompt_tokens: response.usage.input_tokens,
-              completion_tokens: response.usage.output_tokens,
-            },
-          });
-        }
-
-        const client = new OpenAI({ apiKey: resolvedKey! });
-        const completion = await client.chat.completions.create({
-          model: model ?? 'gpt-4o',
-          messages: messages.map((m) => ({
-            role: m.role as 'system' | 'user' | 'assistant',
-            content: m.content,
-          })),
+        const result = await generateText({
+          model: languageModel,
+          ...(systemMsg ? { system: systemMsg.content } : {}),
+          messages: nonSystemMsgs,
+          ...(isClaudeProvider(provider) ? { maxOutputTokens: 1024 } : {}),
         });
 
         return reply.code(200).send({
           keySource,
           provider,
-          choices: completion.choices.map((c) => ({
-            message: { role: c.message.role, content: c.message.content ?? '' },
-          })),
-          usage: completion.usage
-            ? {
-                prompt_tokens: completion.usage.prompt_tokens,
-                completion_tokens: completion.usage.completion_tokens,
-              }
-            : undefined,
+          choices: [{ message: { role: 'assistant', content: result.text } }],
+          usage: {
+            prompt_tokens: result.usage.inputTokens,
+            completion_tokens: result.usage.outputTokens,
+          },
         });
       } catch (err) {
-        if (keyFromHeader) {
-          const status = (err as { status?: number }).status;
+        if (keyFromHeader && APICallError.isInstance(err)) {
+          const status = err.statusCode;
           if (status === 401 || status === 403) {
             return reply.code(status).send({ error: 'Invalid API key', keySource, provider });
           }

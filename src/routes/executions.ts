@@ -1,7 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import Anthropic from '@anthropic-ai/sdk';
-import OpenAI from 'openai';
+import { generateText } from 'ai';
+import { createAnthropic } from '@ai-sdk/anthropic';
+import { createOpenAI } from '@ai-sdk/openai';
 import { RecipeService } from '../services/recipes/index.js';
 import { ExecutionService } from '../services/execution.service.js';
 import { ExecutionContext } from '../services/pipeline/context.js';
@@ -37,27 +38,17 @@ function createRegistry(): StepHandlerRegistry {
         String(input ?? ''),
       );
 
-      if (provider === 'claude') {
-        const client = new Anthropic({ apiKey });
-        const response = await client.messages.create({
-          model: String(config.model ?? 'claude-sonnet-4-6-20250501'),
-          max_tokens: Number(config.maxTokens ?? 1024),
-          messages: [{ role: 'user', content: prompt }],
-        });
+      const languageModel = provider === 'claude'
+        ? createAnthropic({ apiKey })(String(config.model ?? 'claude-sonnet-4-6-20250501'))
+        : createOpenAI({ apiKey })(String(config.model ?? 'gpt-4o'));
 
-        return response.content
-          .filter((b) => b.type === 'text')
-          .map((b) => b.text)
-          .join('');
-      }
-
-      const client = new OpenAI({ apiKey });
-      const completion = await client.chat.completions.create({
-        model: String(config.model ?? 'gpt-4o'),
+      const result = await generateText({
+        model: languageModel,
         messages: [{ role: 'user', content: prompt }],
+        ...(provider === 'claude' ? { maxOutputTokens: Number(config.maxTokens ?? 1024) } : {}),
       });
 
-      return completion.choices[0]?.message?.content ?? '';
+      return result.text;
     },
   });
 

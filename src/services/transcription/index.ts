@@ -1,4 +1,5 @@
-import OpenAI from 'openai';
+import { experimental_transcribe as transcribe } from 'ai';
+import { createOpenAI } from '@ai-sdk/openai';
 
 const SUPPORTED_MIMETYPES = new Set([
   'audio/wav',
@@ -46,23 +47,20 @@ export class TranscriptionService {
       throw new Error('OPENAI_API_KEY environment variable is required for transcription');
     }
 
-    const client = new OpenAI({ apiKey });
-    const ext = MIMETYPE_TO_EXT[mimetype] ?? 'wav';
-    const filename = `audio.${ext}`;
+    const openai = createOpenAI({ apiKey });
 
-    const file = new File([buffer], filename, { type: mimetype });
-
-    const transcription = await client.audio.transcriptions.create({
-      file,
-      model: 'whisper-1',
-      ...(language ? { language } : {}),
-      response_format: 'verbose_json',
+    const result = await transcribe({
+      model: openai.transcription('whisper-1'),
+      audio: new Uint8Array(buffer),
+      ...(language
+        ? { providerOptions: { openai: { language } } }
+        : {}),
     });
 
     return {
-      text: transcription.text,
-      language: transcription.language ?? language ?? 'en',
-      duration: transcription.duration ?? 0,
+      text: result.text,
+      language: result.language ?? language ?? 'en',
+      duration: result.durationInSeconds ?? 0,
       provider: 'openai-whisper',
     };
   }

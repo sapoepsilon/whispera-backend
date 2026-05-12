@@ -137,47 +137,42 @@ await db.update(recipes).set({ name: 'new' }).where(eq(recipes.id, id)).returnin
 await db.select().from(recipes).where(and(eq(recipes.userId, userId), isNull(recipes.deletedAt)));
 ```
 
-### Anthropic SDK — Claude API
-```ts
-import Anthropic from '@anthropic-ai/sdk';
-const client = new Anthropic({ apiKey: userApiKey });
+### Vercel AI SDK — Unified Provider Interface
+The backend uses `ai` with `@ai-sdk/openai` and `@ai-sdk/anthropic`. Per-request BYOK
+is implemented by calling `createOpenAI({ apiKey })` / `createAnthropic({ apiKey })`
+inside the handler so each request gets its own client.
 
-// Non-streaming
-const message = await client.messages.create({
-  model: 'claude-sonnet-4-6-20250501',
-  max_tokens: 1024,
+```ts
+import { generateText, streamText, experimental_transcribe as transcribe } from 'ai';
+import { createOpenAI } from '@ai-sdk/openai';
+import { createAnthropic } from '@ai-sdk/anthropic';
+
+// Chat — Anthropic (BYOK)
+const claude = createAnthropic({ apiKey: userKey })('claude-sonnet-4-6-20250501');
+const result = await generateText({
+  model: claude,
   system: 'You are helpful.',
   messages: [{ role: 'user', content: 'Hello' }],
+  maxOutputTokens: 1024,
 });
-const text = message.content.filter(b => b.type === 'text').map(b => b.text).join('');
+// result.text, result.usage.inputTokens, result.usage.outputTokens
 
-// Streaming
-const stream = client.messages.stream({ model: 'claude-sonnet-4-6-20250501', max_tokens: 1024, messages });
-for await (const event of stream) {
-  if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') yield event.delta.text;
-}
-const final = await stream.finalMessage(); // usage: final.usage.input_tokens
-```
+// Chat — OpenAI (BYOK)
+const gpt = createOpenAI({ apiKey: userKey })('gpt-4o');
+const result2 = await generateText({ model: gpt, messages });
 
-### OpenAI SDK — Chat Completions
-```ts
-import OpenAI from 'openai';
-const client = new OpenAI({ apiKey: userApiKey });
+// Streaming — provider-agnostic
+const stream = streamText({ model: claude, messages });
+for await (const delta of stream.textStream) yield delta;
 
-// Non-streaming
-const completion = await client.chat.completions.create({
-  model: 'gpt-4o',
-  messages: [{ role: 'system', content: '...' }, { role: 'user', content: '...' }],
+// Whisper transcription
+const openai = createOpenAI({ apiKey: userKey });
+const t = await transcribe({
+  model: openai.transcription('whisper-1'),
+  audio: new Uint8Array(buffer),
+  providerOptions: { openai: { language: 'en' } },
 });
-const text = completion.choices[0]?.message?.content ?? '';
-// usage: completion.usage.prompt_tokens, completion.usage.completion_tokens
-
-// Streaming
-const stream = await client.chat.completions.create({ model: 'gpt-4o', messages, stream: true, stream_options: { include_usage: true } });
-for await (const chunk of stream) {
-  const delta = chunk.choices[0]?.delta?.content;
-  if (delta) yield delta;
-}
+// t.text, t.language, t.durationInSeconds
 ```
 
 ## Implementation Phases

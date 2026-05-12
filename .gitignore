@@ -13,6 +13,9 @@ drizzle/meta/
 .mcp.json
 .mcp.json.*
 
+# Qwen Code
+.qwen/
+
 # IDE
 .vscode/
 .idea/

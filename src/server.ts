@@ -117,6 +117,9 @@ export async function buildApp() {
   const { default: transcribeRoute } = await import('./routes/transcribe.js');
   await app.register(transcribeRoute);
 
+  const { default: polishRoute } = await import('./routes/polish.js');
+  await app.register(polishRoute);
+
   return app;
 }
 

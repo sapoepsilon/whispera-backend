@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { RecipeService } from '../../services/recipes/index.js';
+import { RecipeSeedService } from '../../services/recipes/seed.js';
 import { STEP_TYPES } from '../../types/index.js';
 
 const stepSchema = z.object({
@@ -73,6 +74,28 @@ const idParamsSchema = z.object({
 
 export default async function recipesRoutes(app: FastifyInstance) {
   const service = new RecipeService(app.db);
+  const seedService = new RecipeSeedService(app.db);
+
+  app.post(
+    '/recipes/seed-defaults',
+    {
+      preHandler: [app.authenticate],
+      schema: {
+        tags: ['recipes'],
+        summary: 'Seed default starter recipes for the authenticated user',
+        description:
+          'Idempotent. If the user already has any non-deleted recipes, returns ' +
+          '{ created: 0 } without inserting anything. Otherwise inserts the default set.',
+        security: [{ bearerAuth: [] }],
+        response: {
+          200: z.object({ created: z.number().int() }),
+        },
+      },
+    },
+    async (request) => {
+      return seedService.seedDefaultsForUser(request.userId);
+    },
+  );
 
   app.post(
     '/recipes',

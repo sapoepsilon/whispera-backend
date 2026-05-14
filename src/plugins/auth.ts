@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { eq } from 'drizzle-orm';
 import { verifyToken } from '@clerk/backend';
 import { users } from '../db/schema/users.js';
+import { RecipeSeedService } from '../services/recipes/seed.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -67,6 +68,15 @@ async function authPlugin(fastify: FastifyInstance) {
           .returning();
         request.userId = created.id;
         request.clerkId = created.clerkId;
+
+        try {
+          await new RecipeSeedService(fastify.db).seedDefaultsForUser(created.id);
+        } catch (err) {
+          fastify.log.error(
+            { err, userId: created.id },
+            'WHI-46: failed to seed default recipes for new user',
+          );
+        }
       }
     },
   );

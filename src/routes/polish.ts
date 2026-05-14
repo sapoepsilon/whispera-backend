@@ -14,7 +14,7 @@ const polishResponseSchema = z.object({
 const errorSchema = z.object({ error: z.string() });
 
 const POLISH_SYSTEM_PROMPT =
-  "Clean up this dictated text. Remove filler words (um, uh, like, you know), fix grammar and punctuation, but preserve the speaker's meaning, tone, and voice. Do not make it more formal unless it already was. Output only the cleaned text, no preamble.";
+  "Rewrite this dictated text as a polite, well-formatted email body. Remove filler words, fix grammar and punctuation, structure into clear sentences and paragraphs, and keep the original meaning. Use a professional but warm tone. Do not add a subject line, greeting (Hi, Hello), or sign-off (Thanks, Best) unless the speaker dictated one. Output only the email body, no preamble or commentary.";
 
 export default async function polishRoute(app: FastifyInstance) {
   app.post(

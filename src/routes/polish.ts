@@ -45,11 +45,18 @@ export default async function polishRoute(app: FastifyInstance) {
           : undefined;
       const apiKey = byokKey || process.env.OPENAI_API_KEY;
 
+      app.log.info(
+        { userId: request.userId, byok: !!byokKey, inputChars: text.length },
+        '/polish hit',
+      );
+
       if (!apiKey) {
+        app.log.error('/polish: no OpenAI key on server and no BYOK header');
         return reply.code(500).send({ error: 'No OpenAI key configured on the server' });
       }
 
       try {
+        const start = Date.now();
         const model = createOpenAI({ apiKey })('gpt-4o-mini');
         const result = await generateText({
           model,
@@ -58,10 +65,14 @@ export default async function polishRoute(app: FastifyInstance) {
             { role: 'user', content: text },
           ],
         });
+        app.log.info(
+          { ms: Date.now() - start, outputChars: result.text.length },
+          '/polish ok',
+        );
         return { polished: result.text };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        app.log.error({ err }, 'WHI-41: /polish failed');
+        app.log.error({ err }, '/polish failed');
         return reply.code(500).send({ error: message });
       }
     },

@@ -5,6 +5,25 @@ import type { Database } from '../../db/index.js';
 
 export const DEFAULT_RECIPES: ReadonlyArray<Omit<NewRecipe, 'userId'>> = [
   {
+    name: 'Polish speech',
+    description:
+      'Default cleanup that runs on every transcription unless a trigger phrase matches. Removes filler words, fixes grammar, preserves meaning and tone.',
+    triggerPhrase: null,
+    steps: [
+      {
+        type: 'llm',
+        name: 'polish',
+        config: {
+          provider: 'openai',
+          model: 'gpt-4o-mini',
+          prompt:
+            'Clean up this dictated text. Remove filler words (um, uh, like, you know), fix grammar and punctuation, but preserve the speaker\'s meaning, tone, and voice. Do not make it more formal unless it already was. Output only the cleaned text, no preamble.\n\n{{input}}',
+        },
+      },
+    ],
+    outputFormat: 'text',
+  },
+  {
     name: 'Make professional',
     description: 'Rewrites the input in a polite, professional tone.',
     triggerPhrase: 'make professional',

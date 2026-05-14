@@ -29,16 +29,22 @@ const errorSchema = z.object({
   details: z.array(z.unknown()).optional(),
 });
 
-function createRegistry(): StepHandlerRegistry {
+function createRegistry(opts: { byokKey?: string } = {}): StepHandlerRegistry {
   const registry = new StepHandlerRegistry();
 
   registry.register('llm' as StepType, {
     async execute(input: unknown, config: Record<string, unknown>) {
       const provider = String(config.provider ?? 'openai');
-      const apiKey = String(config.apiKey ?? '');
+      const apiKey =
+        (typeof config.apiKey === 'string' && config.apiKey) ||
+        opts.byokKey ||
+        (provider === 'claude'
+          ? process.env.ANTHROPIC_API_KEY
+          : process.env.OPENAI_API_KEY) ||
+        '';
 
       if (!apiKey) {
-        throw new Error('No API key provided for LLM step');
+        throw new Error(`No API key available for ${provider} LLM step`);
       }
 
       const prompt = String(config.prompt ?? '').replace(
@@ -100,7 +106,6 @@ async function runPipeline(
 export default async function executionRoutes(app: FastifyInstance) {
   const recipeService = new RecipeService(app.db);
   const executionService = new ExecutionService(app.db);
-  const registry = createRegistry();
 
   app.post(
     '/recipes/:id/execute',
@@ -133,6 +138,12 @@ export default async function executionRoutes(app: FastifyInstance) {
         name: string;
         config: Record<string, unknown>;
       }>;
+
+      const byokKey =
+        typeof request.headers['x-provider-key'] === 'string'
+          ? request.headers['x-provider-key']
+          : undefined;
+      const registry = createRegistry({ byokKey });
 
       const ctx = new ExecutionContext(recipe.id, request.userId, variables);
 

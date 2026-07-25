@@ -1,5 +1,6 @@
 import { experimental_transcribe as transcribe } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
+import { resolvePlatformApiKey } from '../billing/bypass.js';
 
 const SUPPORTED_MIMETYPES = new Set([
   'audio/wav',
@@ -42,7 +43,7 @@ export class TranscriptionService {
     mimetype: string,
     language?: string,
   ): Promise<TranscriptionResult> {
-    const apiKey = process.env.OPENAI_API_KEY;
+    const apiKey = resolvePlatformApiKey(process.env.OPENAI_API_KEY);
     if (!apiKey) {
       throw new Error('OPENAI_API_KEY environment variable is required for transcription');
     }

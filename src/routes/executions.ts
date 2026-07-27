@@ -165,7 +165,11 @@ export default async function executionRoutes(app: FastifyInstance) {
             if (!request.raw.destroyed) {
               reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
             }
-          } catch {}
+          } catch {
+            // the client hung up between the destroyed check and the write;
+            // there is no one left to tell, and throwing here would take down
+            // the pipeline that is still producing events
+          }
         };
 
         request.raw.on('close', () => {

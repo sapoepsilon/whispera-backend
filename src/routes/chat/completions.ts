@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import { eq, and } from 'drizzle-orm';
 import { z } from 'zod';
 import { generateText, APICallError, type ModelMessage } from 'ai';

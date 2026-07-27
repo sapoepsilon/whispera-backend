@@ -31,6 +31,16 @@ export const envSchema = {
     // Model ids used by seeded recipes and /polish. Default to gpt-4o-mini.
     DEFAULT_RECIPE_MODEL: { type: 'string' as const },
     POLISH_MODEL: { type: 'string' as const },
+    // Pluggable transcription backend for POST /transcribe.
+    // TRANSCRIPTION_PROVIDER: 'openai' (default) | 'custom'. An unknown value
+    // makes the server fail to start.
+    TRANSCRIPTION_PROVIDER: { type: 'string' as const },
+    // Required for 'custom': OpenAI-compatible root, e.g. http://localhost:8000/v1.
+    TRANSCRIPTION_BASE_URL: { type: 'string' as const },
+    // Optional key override; both providers fall back to OPENAI_API_KEY.
+    TRANSCRIPTION_API_KEY: { type: 'string' as const },
+    // Optional model id override; defaults to whisper-1.
+    TRANSCRIPTION_MODEL: { type: 'string' as const },
   },
 };
 
@@ -54,4 +64,8 @@ export interface EnvConfig {
   BILLING_BYPASS?: string;
   DEFAULT_RECIPE_MODEL?: string;
   POLISH_MODEL?: string;
+  TRANSCRIPTION_PROVIDER?: string;
+  TRANSCRIPTION_BASE_URL?: string;
+  TRANSCRIPTION_API_KEY?: string;
+  TRANSCRIPTION_MODEL?: string;
 }

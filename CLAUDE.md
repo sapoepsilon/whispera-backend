@@ -46,6 +46,11 @@ src/
       types.ts           # Message, LLMProvider, LLMResponse interfaces
       router.ts          # ProviderRouter (selects provider by user config)
       adapters/          # claude.ts, openai.ts, base.ts
+    transcription/       # pluggable speech-to-text backend for POST /transcribe
+      types.ts           # TranscriptionProvider/Request/Result interfaces
+      mimetypes.ts       # accepted upload formats
+      factory.ts         # createTranscriptionProvider() (env-driven selection)
+      providers/         # base.ts (OpenAI audio API), openai.ts, custom-base-url.ts
     recipes/index.ts     # RecipeService (CRUD operations)
     store/index.ts       # StoreService (browse, publish, install)
     billing/             # CreditService, StripeService
@@ -70,6 +75,47 @@ tests/
 - **Claude**: Pass-through BYOK only (Anthropic bans third-party subscription OAuth). Client stores key in OS Keychain, sends via `X-Provider-Key` header per request. Backend never stores the key. SDK: `@anthropic-ai/sdk`
 - **OpenAI**: Pass-through BYOK + Codex OAuth ("Sign in with ChatGPT"). Users can send API key via header OR authenticate via PKCE OAuth using their ChatGPT subscription. SDK: `openai`. Codex OAuth docs: developers.openai.com/codex/auth
 - **Client-side Claude Code integration** (future, WHI-34): Mac app wraps local Claude Code CLI via `@anthropic-ai/claude-agent-sdk` for subscription access
+
+## Transcription Providers (POST /transcribe)
+
+The transcription backend is pluggable. `createTranscriptionProvider()` reads the
+environment, validates it, and returns a `TranscriptionProvider`; the route only
+sees that interface and never names an implementation. An unknown provider name
+or incomplete provider config throws at route registration, so the server fails
+to start rather than failing on the first upload.
+
+```ts
+interface TranscriptionProvider {
+  readonly name: string;                                     // reported as `provider` in the response
+  supportsMimetype(mimetype: string): boolean;
+  transcribe(req: { audio: Buffer; mimetype: string; language?: string }):
+    Promise<{ text: string; language: string; duration: number; provider: string }>;
+}
+```
+
+Implementations (both speak the OpenAI audio API via `experimental_transcribe`):
+
+- `OpenAITranscriptionProvider` — the default. Passes no `baseURL`, so the AI SDK
+  keeps honouring `OPENAI_BASE_URL` exactly as before. Reports `openai-whisper`.
+- `CustomBaseUrlTranscriptionProvider` — same wire protocol against an arbitrary
+  endpoint (self-hosted whisper server, proxy, gateway). Reports `openai-compatible`.
+
+Environment variables (all optional; absent config reproduces the previous
+hard-coded OpenAI Whisper behaviour exactly):
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `TRANSCRIPTION_PROVIDER` | `openai` | `openai` or `custom`. Any other value fails at boot. |
+| `TRANSCRIPTION_BASE_URL` | — | **Required for `custom`.** OpenAI-compatible root, e.g. `http://localhost:8000/v1`. Must be an `http(s)` URL. |
+| `TRANSCRIPTION_API_KEY` | — | Key override. Both providers fall back to `OPENAI_API_KEY`; `custom` additionally falls back to a placeholder bearer for auth-free endpoints. |
+| `TRANSCRIPTION_MODEL` | `whisper-1` | Model id posted to `/audio/transcriptions`. |
+
+```bash
+# Self-hosted whisper server
+TRANSCRIPTION_PROVIDER=custom
+TRANSCRIPTION_BASE_URL=http://localhost:8000/v1
+TRANSCRIPTION_MODEL=faster-whisper-large-v3
+```
 
 ## Key Conventions
 

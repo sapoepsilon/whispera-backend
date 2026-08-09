@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { CreditService } from '../../services/billing/credits.js';
 import { StripeService, CREDIT_PACKAGES } from '../../services/billing/stripe.js';
+import { isBillingBypassEnabled, BYPASS_SUBSCRIPTION } from '../../services/billing/bypass.js';
 
 const purchaseSchema = z.object({
   packageId: z.string().refine((val) => val in CREDIT_PACKAGES, {
@@ -21,6 +22,15 @@ export default async function billingCreditsRoutes(app: FastifyInstance) {
         creditService.getBalance(request.userId),
         creditService.getTransactions(request.userId),
       ]);
+
+      if (isBillingBypassEnabled()) {
+        return reply.code(200).send({
+          balance,
+          transactions,
+          unlimited: true,
+          subscription: BYPASS_SUBSCRIPTION,
+        });
+      }
 
       return reply.code(200).send({ balance, transactions });
     },

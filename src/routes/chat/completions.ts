@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import { eq, and } from 'drizzle-orm';
 import { z } from 'zod';
 import { generateText, APICallError, type ModelMessage } from 'ai';
@@ -7,6 +7,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { apiKeys } from '../../db/schema/api-keys.js';
 import { OAuthConnectionService } from '../../services/auth/oauth/connection.js';
 import { decrypt } from '../../services/crypto/index.js';
+import { isBillingBypassEnabled, resolvePlatformApiKey } from '../../services/billing/bypass.js';
 
 const completionBodySchema = z.object({
   messages: z.array(z.object({
@@ -107,14 +108,23 @@ export default async function chatCompletionsRoute(app: FastifyInstance) {
         }
       }
 
+      const billingBypass = isBillingBypassEnabled();
+
+      // With the bypass on, a missing key is never a billing failure: fall
+      // through to the platform key (or its placeholder) instead of 402.
       if (!resolvedKey && keySource !== 'credits') {
-        return reply.code(402).send({ error: 'No API key available', keySource, provider });
+        if (billingBypass) {
+          keySource = 'credits';
+        } else {
+          return reply.code(402).send({ error: 'No API key available', keySource, provider });
+        }
       }
 
       if (keySource === 'credits') {
-        const platformKey = isClaudeProvider(provider)
+        const configuredKey = isClaudeProvider(provider)
           ? process.env.ANTHROPIC_API_KEY
           : process.env.OPENAI_API_KEY;
+        const platformKey = resolvePlatformApiKey(configuredKey);
 
         if (!platformKey) {
           return reply.code(200).send({ keySource, provider });

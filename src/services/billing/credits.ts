@@ -1,6 +1,7 @@
 import { eq, and, sql } from 'drizzle-orm';
 import { creditBalances, creditTransactions } from '../../db/schema/credits.js';
 import { getDb, type Database } from '../../db/index.js';
+import { isBillingBypassEnabled, BYPASS_CREDIT_BALANCE } from './bypass.js';
 
 export class CreditService {
   private db: Database;
@@ -10,6 +11,8 @@ export class CreditService {
   }
 
   async getBalance(userId: string): Promise<number> {
+    if (isBillingBypassEnabled()) return BYPASS_CREDIT_BALANCE;
+
     const [row] = await this.db
       .select({ balance: creditBalances.balance })
       .from(creditBalances)
@@ -46,6 +49,8 @@ export class CreditService {
   }
 
   async deductCredits(userId: string, amount: number): Promise<void> {
+    if (isBillingBypassEnabled()) return;
+
     const result = await this.db
       .update(creditBalances)
       .set({ balance: sql`balance - ${amount}` })
@@ -68,6 +73,8 @@ export class CreditService {
   }
 
   async hasEnoughCredits(userId: string, amount: number): Promise<boolean> {
+    if (isBillingBypassEnabled()) return true;
+
     const balance = await this.getBalance(userId);
     return balance >= amount;
   }

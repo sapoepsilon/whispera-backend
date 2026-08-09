@@ -29,6 +29,20 @@ export async function buildApp() {
   await app.register(fastifyEnv, { schema: envSchema, dotenv: true });
   await app.register(fastifySensible);
 
+  const { isBillingBypassEnabled } = await import('./services/billing/bypass.js');
+  if (isBillingBypassEnabled()) {
+    const { defaultRecipeModel, polishModel } = await import('./config/models.js');
+    app.log.warn(
+      {
+        billingBypass: true,
+        defaultRecipeModel: defaultRecipeModel(),
+        polishModel: polishModel(),
+        openaiBaseUrl: process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1',
+      },
+      'BILLING_BYPASS is enabled: every request is treated as a fully paid subscriber with unlimited credits. Do not use in production.',
+    );
+  }
+
   const { default: swaggerPlugin } = await import('./plugins/swagger.js');
   await app.register(swaggerPlugin);
 

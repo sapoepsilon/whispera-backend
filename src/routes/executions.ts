@@ -8,6 +8,8 @@ import { ExecutionService } from '../services/execution.service.js';
 import { ExecutionContext } from '../services/pipeline/context.js';
 import { StepHandlerRegistry } from '../services/pipeline/registry.js';
 import type { StepType } from '../services/pipeline/types.js';
+import { configuredRecipeModel } from '../config/models.js';
+import { resolvePlatformApiKey } from '../services/billing/bypass.js';
 
 const executeBodySchema = z.object({
   input: z.string().optional().default(''),
@@ -35,12 +37,15 @@ function createRegistry(opts: { byokKey?: string } = {}): StepHandlerRegistry {
   registry.register('llm' as StepType, {
     async execute(input: unknown, config: Record<string, unknown>) {
       const provider = String(config.provider ?? 'openai');
+      const configuredKey =
+        provider === 'claude'
+          ? process.env.ANTHROPIC_API_KEY
+          : process.env.OPENAI_API_KEY;
+
       const apiKey =
         (typeof config.apiKey === 'string' && config.apiKey) ||
         opts.byokKey ||
-        (provider === 'claude'
-          ? process.env.ANTHROPIC_API_KEY
-          : process.env.OPENAI_API_KEY) ||
+        resolvePlatformApiKey(configuredKey) ||
         '';
 
       if (!apiKey) {
@@ -54,7 +59,7 @@ function createRegistry(opts: { byokKey?: string } = {}): StepHandlerRegistry {
 
       const languageModel = provider === 'claude'
         ? createAnthropic({ apiKey })(String(config.model ?? 'claude-sonnet-4-6-20250501'))
-        : createOpenAI({ apiKey })(String(config.model ?? 'gpt-4o'));
+        : createOpenAI({ apiKey })(String(config.model ?? configuredRecipeModel() ?? 'gpt-4o'));
 
       const result = await generateText({
         model: languageModel,
@@ -160,7 +165,11 @@ export default async function executionRoutes(app: FastifyInstance) {
             if (!request.raw.destroyed) {
               reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
             }
-          } catch {}
+          } catch {
+            // the client hung up between the destroyed check and the write;
+            // there is no one left to tell, and throwing here would take down
+            // the pipeline that is still producing events
+          }
         };
 
         request.raw.on('close', () => {

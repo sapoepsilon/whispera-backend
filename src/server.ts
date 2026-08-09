@@ -76,6 +76,13 @@ export async function buildApp() {
   const multipart = await import('@fastify/multipart');
   await app.register(multipart.default, { limits: { fileSize: 25 * 1024 * 1024 } });
 
+  // Required by WS /transcription/stream. Only upgrade requests are affected;
+  // every plain HTTP route behaves exactly as before. 1 MiB is far above a
+  // realtime audio frame (a 100 ms chunk is ~6 KB base64) and well below
+  // anything a client could use to exhaust memory.
+  const websocket = await import('@fastify/websocket');
+  await app.register(websocket.default, { options: { maxPayload: 1024 * 1024 } });
+
   app.setErrorHandler((error: FastifyError, _request, reply) => {
     app.log.error(error);
 
@@ -130,6 +137,9 @@ export async function buildApp() {
 
   const { default: transcribeRoute } = await import('./routes/transcribe.js');
   await app.register(transcribeRoute);
+
+  const { default: transcriptionRoutes } = await import('./routes/transcription/index.js');
+  await app.register(transcriptionRoutes);
 
   const { default: polishRoute } = await import('./routes/polish.js');
   await app.register(polishRoute);

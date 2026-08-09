@@ -2,6 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { generateText } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
+import { polishModel } from '../config/models.js';
+import { resolvePlatformApiKey } from '../services/billing/bypass.js';
 
 const polishBodySchema = z.object({
   text: z.string().min(1),
@@ -43,7 +45,7 @@ export default async function polishRoute(app: FastifyInstance) {
         typeof request.headers['x-provider-key'] === 'string'
           ? request.headers['x-provider-key']
           : undefined;
-      const apiKey = byokKey || process.env.OPENAI_API_KEY;
+      const apiKey = byokKey || resolvePlatformApiKey(process.env.OPENAI_API_KEY);
 
       app.log.info(
         { userId: request.userId, byok: !!byokKey, inputChars: text.length },
@@ -57,7 +59,8 @@ export default async function polishRoute(app: FastifyInstance) {
 
       try {
         const start = Date.now();
-        const model = createOpenAI({ apiKey })('gpt-4o-mini');
+        const modelId = polishModel();
+        const model = createOpenAI({ apiKey })(modelId);
         const result = await generateText({
           model,
           messages: [
@@ -66,7 +69,7 @@ export default async function polishRoute(app: FastifyInstance) {
           ],
         });
         app.log.info(
-          { ms: Date.now() - start, outputChars: result.text.length },
+          { ms: Date.now() - start, model: modelId, outputChars: result.text.length },
           '/polish ok',
         );
         return { polished: result.text };

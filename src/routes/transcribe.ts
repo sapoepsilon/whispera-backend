@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
-import { TranscriptionService } from '../services/transcription/index.js';
+import { createTranscriptionProvider } from '../services/transcription/index.js';
 
 const transcribeResponseSchema = z.object({
   text: z.string(),
@@ -12,7 +12,9 @@ const transcribeResponseSchema = z.object({
 const errorSchema = z.object({ error: z.string() });
 
 export default async function transcribeRoute(app: FastifyInstance) {
-  const transcriptionService = new TranscriptionService();
+  // Built once at registration so bad provider config fails at boot. Which
+  // implementation comes back is not this route's business.
+  const transcriber = createTranscriptionProvider();
 
   app.post(
     '/transcribe',
@@ -24,7 +26,8 @@ export default async function transcribeRoute(app: FastifyInstance) {
         summary: 'Transcribe audio (multipart/form-data)',
         description:
           'Accepts a single audio file under any field name plus an optional `language` text field. ' +
-          'Uses OpenAI Whisper. Body is multipart/form-data; OpenAPI cannot fully express this — ' +
+          'Uses the configured transcription provider (OpenAI Whisper by default). ' +
+          'Body is multipart/form-data; OpenAPI cannot fully express this — ' +
           'send a binary `file` field and an optional `language` text field.',
         security: [{ bearerAuth: [] }],
         consumes: ['multipart/form-data'],
@@ -56,16 +59,16 @@ export default async function transcribeRoute(app: FastifyInstance) {
         return reply.code(400).send({ error: 'No audio file provided' });
       }
 
-      if (!transcriptionService.isSupportedMimetype(file.mimetype)) {
+      if (!transcriber.supportsMimetype(file.mimetype)) {
         return reply.code(400).send({ error: 'Unsupported audio format' });
       }
 
       const buffer = await file.toBuffer();
-      const result = await transcriptionService.transcribe(
-        buffer,
-        file.mimetype,
+      const result = await transcriber.transcribe({
+        audio: buffer,
+        mimetype: file.mimetype,
         language,
-      );
+      });
 
       return reply.code(200).send(result);
     },

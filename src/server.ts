@@ -29,6 +29,20 @@ export async function buildApp() {
   await app.register(fastifyEnv, { schema: envSchema, dotenv: true });
   await app.register(fastifySensible);
 
+  const { isBillingBypassEnabled } = await import('./services/billing/bypass.js');
+  if (isBillingBypassEnabled()) {
+    const { defaultRecipeModel, polishModel } = await import('./config/models.js');
+    app.log.warn(
+      {
+        billingBypass: true,
+        defaultRecipeModel: defaultRecipeModel(),
+        polishModel: polishModel(),
+        openaiBaseUrl: process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1',
+      },
+      'BILLING_BYPASS is enabled: every request is treated as a fully paid subscriber with unlimited credits. Do not use in production.',
+    );
+  }
+
   const { default: swaggerPlugin } = await import('./plugins/swagger.js');
   await app.register(swaggerPlugin);
 
@@ -61,6 +75,13 @@ export async function buildApp() {
 
   const multipart = await import('@fastify/multipart');
   await app.register(multipart.default, { limits: { fileSize: 25 * 1024 * 1024 } });
+
+  // Required by WS /transcription/stream. Only upgrade requests are affected;
+  // every plain HTTP route behaves exactly as before. 1 MiB is far above a
+  // realtime audio frame (a 100 ms chunk is ~6 KB base64) and well below
+  // anything a client could use to exhaust memory.
+  const websocket = await import('@fastify/websocket');
+  await app.register(websocket.default, { options: { maxPayload: 1024 * 1024 } });
 
   app.setErrorHandler((error: FastifyError, _request, reply) => {
     app.log.error(error);
@@ -116,6 +137,9 @@ export async function buildApp() {
 
   const { default: transcribeRoute } = await import('./routes/transcribe.js');
   await app.register(transcribeRoute);
+
+  const { default: transcriptionRoutes } = await import('./routes/transcription/index.js');
+  await app.register(transcriptionRoutes);
 
   const { default: polishRoute } = await import('./routes/polish.js');
   await app.register(polishRoute);

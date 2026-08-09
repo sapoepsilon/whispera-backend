@@ -46,6 +46,11 @@ src/
       types.ts           # Message, LLMProvider, LLMResponse interfaces
       router.ts          # ProviderRouter (selects provider by user config)
       adapters/          # claude.ts, openai.ts, base.ts
+    transcription/       # pluggable speech-to-text backend for POST /transcribe
+      types.ts           # TranscriptionProvider/Request/Result interfaces
+      mimetypes.ts       # accepted upload formats
+      factory.ts         # createTranscriptionProvider() (env-driven selection)
+      providers/         # base.ts (OpenAI audio API), openai.ts, custom-base-url.ts
     recipes/index.ts     # RecipeService (CRUD operations)
     store/index.ts       # StoreService (browse, publish, install)
     billing/             # CreditService, StripeService
@@ -70,6 +75,109 @@ tests/
 - **Claude**: Pass-through BYOK only (Anthropic bans third-party subscription OAuth). Client stores key in OS Keychain, sends via `X-Provider-Key` header per request. Backend never stores the key. SDK: `@anthropic-ai/sdk`
 - **OpenAI**: Pass-through BYOK + Codex OAuth ("Sign in with ChatGPT"). Users can send API key via header OR authenticate via PKCE OAuth using their ChatGPT subscription. SDK: `openai`. Codex OAuth docs: developers.openai.com/codex/auth
 - **Client-side Claude Code integration** (future, WHI-34): Mac app wraps local Claude Code CLI via `@anthropic-ai/claude-agent-sdk` for subscription access
+
+## Transcription Providers (POST /transcribe)
+
+The transcription backend is pluggable. `createTranscriptionProvider()` reads the
+environment, validates it, and returns a `TranscriptionProvider`; the route only
+sees that interface and never names an implementation. An unknown provider name
+or incomplete provider config throws at route registration, so the server fails
+to start rather than failing on the first upload.
+
+```ts
+interface TranscriptionProvider {
+  readonly name: string;                                     // reported as `provider` in the response
+  supportsMimetype(mimetype: string): boolean;
+  transcribe(req: { audio: Buffer; mimetype: string; language?: string }):
+    Promise<{ text: string; language: string; duration: number; provider: string }>;
+}
+```
+
+Implementations (both speak the OpenAI audio API via `experimental_transcribe`):
+
+- `OpenAITranscriptionProvider` — the default. Passes no `baseURL`, so the AI SDK
+  keeps honouring `OPENAI_BASE_URL` exactly as before. Reports `openai-whisper`.
+- `CustomBaseUrlTranscriptionProvider` — same wire protocol against an arbitrary
+  endpoint (self-hosted whisper server, proxy, gateway). Reports `openai-compatible`.
+
+Environment variables (all optional; absent config reproduces the previous
+hard-coded OpenAI Whisper behaviour exactly):
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `TRANSCRIPTION_PROVIDER` | `openai` | `openai` or `custom`. Any other value fails at boot. |
+| `TRANSCRIPTION_BASE_URL` | — | **Required for `custom`.** OpenAI-compatible root, e.g. `http://localhost:8000/v1`. Must be an `http(s)` URL. |
+| `TRANSCRIPTION_API_KEY` | — | Key override. Both providers fall back to `OPENAI_API_KEY`; `custom` additionally falls back to a placeholder bearer for auth-free endpoints. |
+| `TRANSCRIPTION_MODEL` | `whisper-1` | Model id posted to `/audio/transcriptions`. |
+
+```bash
+# Self-hosted whisper server
+TRANSCRIPTION_PROVIDER=custom
+TRANSCRIPTION_BASE_URL=http://localhost:8000/v1
+TRANSCRIPTION_MODEL=faster-whisper-large-v3
+```
+
+## Streaming Transcription (`GET /transcription/servers`, `WS /transcription/stream`)
+
+Batch is request/response, so streaming gets a sibling interface rather than a
+reinterpretation of `TranscriptionProvider`. `TranscriptionServerRegistry` sits
+above both and resolves a server id to whichever one a caller needs, so routes
+never name an implementation.
+
+```ts
+interface RealtimeTranscriptionProvider {
+  readonly name: string;
+  connect(options, listeners): Promise<RealtimeTranscriptionSession>;
+}
+
+interface RealtimeTranscriptionSession {
+  readonly provider: string;
+  readonly open: boolean;
+  readonly bufferedBytes: number;      // the proxy's backpressure signal
+  send(frame: { data: string | Buffer; isBinary: boolean }): void;
+  pause(): void; resume(): void;
+  close(code?: number, reason?: string): void;
+}
+```
+
+Frames are opaque: the OpenAI Realtime event shape is the contract between the
+client and the engine, and the proxy carries it verbatim. An engine speaking a
+different protocol (a streaming Nemotron checkpoint, say) implements
+`RealtimeTranscriptionProvider` and translates inside itself — no route changes.
+
+`TRANSCRIPTION_SERVERS` holds a JSON array; when absent, one entry is
+synthesised from the `TRANSCRIPTION_*` vars above so existing deployments are
+unchanged. That synthesised entry advertises only `batch` — nothing in the
+legacy env says an endpoint speaks the Realtime API.
+
+| Field | Default | Notes |
+| --- | --- | --- |
+| `id` | — | **Required**, unique. What the client passes as `?server=`. |
+| `label` | the `id` | Human-facing name for a server picker. |
+| `baseUrl` | AI SDK resolution | OpenAI-compatible root. Must be `http(s)`. |
+| `apiKey` | `OPENAI_API_KEY` | Per-server override. Never returned to a client. |
+| `model` | `whisper-1` | Model id. |
+| `capabilities` | `["batch"]` | `batch`, `realtime`, or both. |
+| `realtimePath` | `/realtime` | Appended to `baseUrl` for the upgrade. |
+
+```bash
+TRANSCRIPTION_SERVERS='[{"id":"speaches-lan","label":"Speaches (LAN)","baseUrl":"http://192.168.50.140:8000/v1","model":"Systran/faster-distil-whisper-large-v3","capabilities":["batch","realtime"]}]'
+```
+
+Two things about speaches that the code depends on and that are easy to get
+wrong (both verified on the wire):
+
+- **The realtime path has no trailing slash.** `GET /v1/realtime` 307s to
+  `/v1/realtime/`, but the *upgrade* to the slashed form answers HTTP 500.
+- **Audio is 24 kHz** PCM16 mono LE, base64'd into `input_audio_buffer.append`.
+  Sending 16 kHz is not rejected — it is time-compressed. `GET
+  /transcription/servers` reports the required format in `realtime.audio` so
+  clients do not have to know this.
+
+Auth runs on the upgrade request, so an unauthenticated client is refused with
+HTTP 401 and never reaches a WebSocket. Later refusals close with an application
+code — 4404 unknown server, 4400 not realtime-capable, 1011 engine failure, 1013
+a peer could not keep up — plus an error frame in the engine's own envelope.
 
 ## Key Conventions
 

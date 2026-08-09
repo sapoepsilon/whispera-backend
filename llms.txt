@@ -39,7 +39,7 @@ Node 20 + TypeScript (ESM, strict). Fastify 5 with manual route registration in 
   - Default model: `gpt-4o` (OpenAI), `claude-sonnet-4-6-20250501` (Anthropic).
 
 ### Transcribe
-- `POST /transcribe` — Whisper audio transcription. `multipart/form-data` with a file field and optional `language` text field. Returns `{ text, language, duration, provider }`. Backed by `openai.transcription('whisper-1')` via the AI SDK.
+- `POST /transcribe` — Whisper audio transcription. `multipart/form-data` with a file field and optional `language` text field. Returns `{ text, language, duration, provider }`. Backed by a pluggable `TranscriptionProvider` (`src/services/transcription/`); the default is `openai.transcription('whisper-1')` via the AI SDK, and `TRANSCRIPTION_PROVIDER=custom` + `TRANSCRIPTION_BASE_URL` points the same OpenAI audio API at a self-hosted or proxied endpoint. See CLAUDE.md for the full env var table.
 
 ### Store, billing, OAuth (less commonly wired by clients)
 - `/store/*` — public recipe store (browse, publish, install).

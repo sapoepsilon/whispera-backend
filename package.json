@@ -22,7 +22,9 @@
     "db:studio": "drizzle-kit studio"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.1",
     "@typescript-eslint/eslint-plugin": "^8.58.2",
     "@typescript-eslint/parser": "^8.58.2",
     "drizzle-kit": "^0.31.10",
@@ -32,6 +34,7 @@
     "tsconfig-paths": "^4.2.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
+    "typescript-eslint": "^8.65.0",
     "vitest": "^3.1.1"
   },
   "dependencies": {
@@ -48,6 +51,7 @@
     "@fastify/sensible": "^6.0.4",
     "@fastify/swagger": "^9.7.0",
     "@fastify/swagger-ui": "^5.2.6",
+    "@fastify/websocket": "^11.3.0",
     "ai": "^6.0.177",
     "argon2": "^0.44.0",
     "drizzle-orm": "^0.45.2",
@@ -56,6 +60,7 @@
     "fastify-type-provider-zod": "^6.1.0",
     "postgres": "^3.4.9",
     "stripe": "^22.0.2",
+    "ws": "^8.21.3",
     "zod": "^4.3.6"
   }
 }

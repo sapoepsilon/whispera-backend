@@ -1,67 +1,91 @@
-import { experimental_transcribe as transcribe } from 'ai';
-import { createOpenAI } from '@ai-sdk/openai';
+export type {
+  TranscriptionProvider,
+  TranscriptionRequest,
+  TranscriptionResult,
+} from './types.js';
 
-const SUPPORTED_MIMETYPES = new Set([
-  'audio/wav',
-  'audio/x-wav',
-  'audio/mpeg',
-  'audio/mp3',
-  'audio/mp4',
-  'audio/x-m4a',
-  'audio/m4a',
-  'audio/webm',
-  'audio/ogg',
-]);
+export { SUPPORTED_MIMETYPES, isSupportedMimetype } from './mimetypes.js';
 
-const MIMETYPE_TO_EXT: Record<string, string> = {
-  'audio/wav': 'wav',
-  'audio/x-wav': 'wav',
-  'audio/mpeg': 'mp3',
-  'audio/mp3': 'mp3',
-  'audio/mp4': 'mp4',
-  'audio/x-m4a': 'm4a',
-  'audio/m4a': 'm4a',
-  'audio/webm': 'webm',
-  'audio/ogg': 'ogg',
-};
+export {
+  OpenAICompatibleTranscriptionProvider,
+  DEFAULT_TRANSCRIPTION_MODEL,
+} from './providers/base.js';
+export type {
+  OpenAICompatibleTranscriptionConfig,
+  FetchImplementation,
+} from './providers/base.js';
 
-export interface TranscriptionResult {
-  text: string;
-  language: string;
-  duration: number;
-  provider: string;
-}
+export {
+  OpenAITranscriptionProvider,
+  OPENAI_TRANSCRIPTION_PROVIDER_NAME,
+} from './providers/openai.js';
 
-export class TranscriptionService {
-  isSupportedMimetype(mimetype: string): boolean {
-    return SUPPORTED_MIMETYPES.has(mimetype);
-  }
+export {
+  CustomBaseUrlTranscriptionProvider,
+  CUSTOM_TRANSCRIPTION_PROVIDER_NAME,
+  NO_AUTH_PLACEHOLDER_API_KEY,
+} from './providers/custom-base-url.js';
+export type { CustomBaseUrlTranscriptionConfig } from './providers/custom-base-url.js';
 
-  async transcribe(
-    buffer: Buffer,
-    mimetype: string,
-    language?: string,
-  ): Promise<TranscriptionResult> {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      throw new Error('OPENAI_API_KEY environment variable is required for transcription');
-    }
+export {
+  createTranscriptionProvider,
+  TRANSCRIPTION_PROVIDER_NAMES,
+  DEFAULT_TRANSCRIPTION_PROVIDER,
+} from './factory.js';
+export type { TranscriptionProviderName, TranscriptionProviderEnv } from './factory.js';
 
-    const openai = createOpenAI({ apiKey });
+export {
+  readTranscriptionServers,
+  resolveBaseUrl,
+  hasCapability,
+  TRANSCRIPTION_CAPABILITIES,
+  DEFAULT_SERVER_ID,
+  DEFAULT_REALTIME_PATH,
+  OPENAI_DEFAULT_BASE_URL,
+} from './servers.js';
+export type {
+  TranscriptionCapability,
+  TranscriptionServerConfig,
+  TranscriptionServersEnv,
+} from './servers.js';
 
-    const result = await transcribe({
-      model: openai.transcription('whisper-1'),
-      audio: new Uint8Array(buffer),
-      ...(language
-        ? { providerOptions: { openai: { language } } }
-        : {}),
-    });
+export {
+  TranscriptionServerRegistry,
+  REALTIME_AUDIO_FORMAT,
+  REALTIME_STREAM_PATH,
+  PROBE_CACHE_MS,
+  PROBE_TIMEOUT_MS,
+} from './registry.js';
+export type {
+  TranscriptionServerSummary,
+  TranscriptionServerStatus,
+  TranscriptionRegistryDeps,
+} from './registry.js';
 
-    return {
-      text: result.text,
-      language: result.language ?? language ?? 'en',
-      duration: result.durationInSeconds ?? 0,
-      provider: 'openai-whisper',
-    };
-  }
-}
+export type {
+  RealtimeFrame,
+  RealtimeConnectOptions,
+  RealtimeSessionListeners,
+  RealtimeTranscriptionProvider,
+  RealtimeTranscriptionSession,
+} from './realtime/types.js';
+
+export {
+  OpenAIRealtimeTranscriptionProvider,
+  OPENAI_REALTIME_PROVIDER_NAME,
+  DEFAULT_HANDSHAKE_TIMEOUT_MS,
+  toWebSocketUrl,
+} from './realtime/openai-realtime.js';
+export type { OpenAIRealtimeProviderConfig } from './realtime/openai-realtime.js';
+
+export {
+  RealtimeBridge,
+  sanitiseCloseCode,
+  realtimeErrorFrame,
+  CLOSE_BAD_REQUEST,
+  CLOSE_UNAUTHORIZED,
+  CLOSE_UNKNOWN_SERVER,
+  CLOSE_UPSTREAM_FAILED,
+  CLOSE_BACKPRESSURE,
+} from './realtime/proxy.js';
+export type { RealtimeProxyOptions, RealtimeProxyLogger } from './realtime/proxy.js';

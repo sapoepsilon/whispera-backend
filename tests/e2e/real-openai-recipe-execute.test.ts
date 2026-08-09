@@ -20,7 +20,9 @@ import {
 } from '../helpers.js';
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const MODEL = 'gpt-4o-mini';
+// Overridable so this suite can run against an OpenAI-compatible proxy that
+// does not serve gpt-4o-mini. Defaults to the historical model.
+const MODEL = process.env.E2E_MODEL?.trim() || 'gpt-4o-mini';
 
 let app: FastifyInstance;
 let token: string;

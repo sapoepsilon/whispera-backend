@@ -41,6 +41,13 @@ export const envSchema = {
     TRANSCRIPTION_API_KEY: { type: 'string' as const },
     // Optional model id override; defaults to whisper-1.
     TRANSCRIPTION_MODEL: { type: 'string' as const },
+    // Multi-server transcription config: a JSON array of
+    // { id, label?, baseUrl?, apiKey?, model?, capabilities?, realtimePath? }.
+    // Drives GET /transcription/servers and WS /transcription/stream. When
+    // absent, a single entry is synthesised from the TRANSCRIPTION_* vars above
+    // so existing deployments are unchanged. A server must list "realtime" in
+    // its capabilities before it can be streamed to.
+    TRANSCRIPTION_SERVERS: { type: 'string' as const },
   },
 };
 
@@ -68,4 +75,5 @@ export interface EnvConfig {
   TRANSCRIPTION_BASE_URL?: string;
   TRANSCRIPTION_API_KEY?: string;
   TRANSCRIPTION_MODEL?: string;
+  TRANSCRIPTION_SERVERS?: string;
 }

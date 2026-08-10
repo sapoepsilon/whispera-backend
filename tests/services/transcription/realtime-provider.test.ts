@@ -8,12 +8,15 @@ import {
   REALTIME_AUDIO_FORMAT,
   TranscriptionServerRegistry,
   readTranscriptionServers,
+  resolveGranularity,
   sanitiseCloseCode,
   toWebSocketUrl,
 } from '../../../src/services/transcription/index.js';
 import type {
   RealtimeFrame,
+  RealtimeGranularity,
   RealtimeSessionListeners,
+  RealtimeTranscriptionProvider,
   RealtimeTranscriptionSession,
 } from '../../../src/services/transcription/index.js';
 import { startFakeRealtimeServer, waitFor, type FakeRealtimeServer } from '../../fake-realtime-server.js';
@@ -264,6 +267,7 @@ describe('TranscriptionServerRegistry', () => {
       protocol: OPENAI_REALTIME_PROVIDER_NAME,
       path: '/transcription/stream?server=speaches-lan',
       audio: REALTIME_AUDIO_FORMAT,
+      granularity: 'utterance',
     });
   });
 
@@ -324,6 +328,98 @@ describe('TranscriptionServerRegistry', () => {
 
     expect(serialised).not.toContain('sk-super-secret');
     expect(serialised).not.toContain('internal:8000');
+  });
+});
+
+describe('realtime granularity in discovery', () => {
+  const okFetch = () =>
+    vi.fn(async (_input: Parameters<typeof globalThis.fetch>[0], _init?: RequestInit) =>
+      new Response('{}', { status: 200 }),
+    );
+
+  it('reports utterance granularity for a plain realtime server', async () => {
+    const registry = new TranscriptionServerRegistry(
+      readTranscriptionServers({
+        TRANSCRIPTION_SERVERS: JSON.stringify([
+          {
+            id: 'speaches-lan',
+            baseUrl: 'http://192.168.50.140:8000/v1',
+            capabilities: ['batch', 'realtime'],
+          },
+        ]),
+      }),
+      { fetch: okFetch() },
+    );
+
+    const [speaches] = await registry.describe();
+    expect(speaches.realtime?.granularity).toBe('utterance');
+  });
+
+  it('reports synthesized-delta granularity once a server opts into synthesis', async () => {
+    const registry = new TranscriptionServerRegistry(
+      readTranscriptionServers({
+        TRANSCRIPTION_SERVERS: JSON.stringify([
+          {
+            id: 'speaches-lan',
+            baseUrl: 'http://192.168.50.140:8000/v1',
+            capabilities: ['batch', 'realtime'],
+            synthesizeDeltas: true,
+          },
+        ]),
+      }),
+      { fetch: okFetch() },
+    );
+
+    const [speaches] = await registry.describe();
+    expect(speaches.realtime?.granularity).toBe('synthesized-delta');
+  });
+
+  it('omits granularity for a batch-only server, along with the rest of the realtime block', async () => {
+    const registry = new TranscriptionServerRegistry(
+      readTranscriptionServers({
+        TRANSCRIPTION_SERVERS: JSON.stringify([{ id: 'cloud', capabilities: ['batch'] }]),
+      }),
+      { fetch: okFetch() },
+    );
+
+    const [cloud] = await registry.describe();
+    expect(cloud.realtime).toBeNull();
+  });
+});
+
+function fakeProvider(granularity?: RealtimeGranularity): RealtimeTranscriptionProvider {
+  return {
+    name: 'fake',
+    ...(granularity ? { granularity } : {}),
+    connect() {
+      throw new Error('not used by these tests');
+    },
+  };
+}
+
+describe('resolveGranularity', () => {
+  const config = readTranscriptionServers({
+    TRANSCRIPTION_SERVERS: JSON.stringify([
+      { id: 'x', baseUrl: 'http://host/v1', capabilities: ['batch', 'realtime'] },
+    ]),
+  })[0];
+
+  it('defaults to utterance when nothing streams natively and synthesis is off', () => {
+    expect(resolveGranularity(config, fakeProvider())).toBe('utterance');
+  });
+
+  it('prefers synthesized-delta once the config opts in', () => {
+    expect(resolveGranularity({ ...config, synthesizeDeltas: true }, fakeProvider())).toBe(
+      'synthesized-delta',
+    );
+  });
+
+  it('lets a natively-streaming provider win even when synthesis is also configured', () => {
+    // Not a real provider today (see the field's own doc comment) — this is
+    // the seam a future streaming-native engine plugs into.
+    expect(
+      resolveGranularity({ ...config, synthesizeDeltas: true }, fakeProvider('native-delta')),
+    ).toBe('native-delta');
   });
 });
 

@@ -161,6 +161,45 @@ describe('readTranscriptionServers — failing fast', () => {
   });
 });
 
+describe('readTranscriptionServers — synthesizeDeltas', () => {
+  it('defaults to false when omitted', () => {
+    const [speaches] = readTranscriptionServers(servers([SPEACHES]));
+    expect(speaches.synthesizeDeltas).toBe(false);
+  });
+
+  it('accepts the flag when the server also has batch', () => {
+    const [speaches] = readTranscriptionServers(
+      servers([{ ...SPEACHES, synthesizeDeltas: true }]),
+    );
+    expect(speaches.synthesizeDeltas).toBe(true);
+  });
+
+  it('accepts the flag on a bare entry, which defaults to batch', () => {
+    const [bare] = readTranscriptionServers(servers([{ id: 'x', synthesizeDeltas: true }]));
+    expect(bare.capabilities).toEqual(['batch']);
+    expect(bare.synthesizeDeltas).toBe(true);
+  });
+
+  it('rejects the flag on a server with only realtime, since there is no batch endpoint to synthesize against', () => {
+    expect(() =>
+      readTranscriptionServers(
+        servers([{ id: 'x', capabilities: ['realtime'], synthesizeDeltas: true }]),
+      ),
+    ).toThrow(/synthesizeDeltas requires the "batch" capability/);
+  });
+
+  it('rejects a non-boolean value', () => {
+    expect(() =>
+      readTranscriptionServers(servers([{ id: 'x', synthesizeDeltas: 'yes' }])),
+    ).toThrow(/not a valid server list/);
+  });
+
+  it('never sets it for the legacy single-server env, even implicitly', () => {
+    const [only] = readTranscriptionServers({});
+    expect(only.synthesizeDeltas).toBe(false);
+  });
+});
+
 describe('resolveBaseUrl', () => {
   it('uses the server base URL when it has one', () => {
     const [speaches] = readTranscriptionServers(servers([SPEACHES]));

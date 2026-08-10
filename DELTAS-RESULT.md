@@ -180,4 +180,6 @@ pnpm test tests/e2e/local-stt-synthesized-deltas.test.ts
 
 ## PR
 
-<!-- filled in after `gh pr create` -->
+https://github.com/sapoepsilon/whispera-backend/pull/3
+
+Stacked on `feat/realtime-transcription-proxy` (PR #1).

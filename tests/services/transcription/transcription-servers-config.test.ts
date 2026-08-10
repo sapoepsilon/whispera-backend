@@ -213,3 +213,31 @@ describe('resolveBaseUrl', () => {
     expect(resolveBaseUrl(bare, {})).toBe(OPENAI_DEFAULT_BASE_URL);
   });
 });
+
+
+describe('explicit granularity override', () => {
+  it('carries a declared native-delta through to the config', () => {
+    const servers = readTranscriptionServers({
+      TRANSCRIPTION_SERVERS: JSON.stringify([
+        {
+          id: 'nemo-stream',
+          baseUrl: 'http://192.168.50.38:8001/v1',
+          model: 'nvidia/nemotron-3.5-asr-streaming-0.6b',
+          capabilities: ['realtime'],
+          granularity: 'native-delta',
+        },
+      ]),
+    });
+    expect(servers[0].granularity).toBe('native-delta');
+  });
+
+  it('rejects an unknown granularity value', () => {
+    expect(() =>
+      readTranscriptionServers({
+        TRANSCRIPTION_SERVERS: JSON.stringify([
+          { id: 'x', baseUrl: 'http://h/v1', granularity: 'word-by-word' },
+        ]),
+      }),
+    ).toThrow();
+  });
+});

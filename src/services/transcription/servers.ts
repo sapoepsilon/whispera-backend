@@ -50,6 +50,14 @@ export interface TranscriptionServerConfig {
    * synthesis has nowhere to send its re-transcription requests otherwise.
    */
   readonly synthesizeDeltas: boolean;
+  /**
+   * Explicit granularity override. An engine that emits its own deltas (the
+   * NeMo streaming shim) has no way to say so through a generic
+   * OpenAI-Realtime provider, so the operator states it here. Absent, the
+   * granularity is derived: synthesis on -> synthesized-delta, else whatever
+   * the provider declares, else utterance.
+   */
+  readonly granularity?: 'native-delta' | 'synthesized-delta' | 'utterance';
 }
 
 export interface TranscriptionServersEnv {
@@ -73,6 +81,7 @@ const serverEntrySchema = z
     capabilities: z.array(z.enum(TRANSCRIPTION_CAPABILITIES)).min(1).optional(),
     realtimePath: trimmed.optional(),
     synthesizeDeltas: z.boolean().optional(),
+    granularity: z.enum(['native-delta', 'synthesized-delta', 'utterance']).optional(),
   })
   .strict();
 
@@ -119,6 +128,7 @@ function toConfig(entry: TranscriptionServerEntry): TranscriptionServerConfig {
     : undefined;
   const capabilities = entry.capabilities ?? ['batch'];
   const synthesizeDeltas = entry.synthesizeDeltas ?? false;
+  const granularity = entry.granularity;
 
   if (synthesizeDeltas && !capabilities.includes('batch')) {
     throw new Error(
@@ -136,6 +146,7 @@ function toConfig(entry: TranscriptionServerEntry): TranscriptionServerConfig {
     capabilities,
     realtimePath: entry.realtimePath ?? DEFAULT_REALTIME_PATH,
     synthesizeDeltas,
+    ...(granularity ? { granularity } : {}),
   };
 }
 

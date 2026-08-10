@@ -265,6 +265,9 @@ export function resolveGranularity(
   config: TranscriptionServerConfig,
   provider: RealtimeTranscriptionProvider,
 ): RealtimeGranularity {
+  // The operator's explicit declaration wins: a generic provider cannot know
+  // that the engine behind it emits native deltas.
+  if (config.granularity) return config.granularity;
   if (provider.granularity === 'native-delta') return 'native-delta';
   if (config.synthesizeDeltas) return 'synthesized-delta';
   return provider.granularity ?? 'utterance';

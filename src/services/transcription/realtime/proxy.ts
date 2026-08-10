@@ -43,6 +43,16 @@ export interface RealtimeProxyOptions {
   logger?: RealtimeProxyLogger;
   /** Included in every log line so one session can be followed end to end. */
   context?: Record<string, unknown>;
+  /**
+   * Opt-in observers for the synthesized-delta feature (`DeltaSynthesizer`).
+   * The bridge stays byte-opaque by default — these are undefined unless a
+   * server's config turns synthesis on — and even then they only get to look:
+   * they cannot alter, delay or drop a frame the bridge is relaying.
+   */
+  observeClientFrame?: (frame: RealtimeFrame) => void;
+  observeEngineFrame?: (frame: RealtimeFrame) => void;
+  /** Called once, when the session tears down — an opt-in feature's cue to stop its own timers. */
+  onDisposed?: () => void;
 }
 
 /**
@@ -141,6 +151,9 @@ export class RealtimeBridge {
   private readonly limits: { high: number; low: number; pollMs: number; timeoutMs: number };
   private readonly log: RealtimeProxyLogger | undefined;
   private readonly context: Record<string, unknown>;
+  private readonly observeClientFrame: ((frame: RealtimeFrame) => void) | undefined;
+  private readonly observeEngineFrame: ((frame: RealtimeFrame) => void) | undefined;
+  private readonly onDisposedCallback: (() => void) | undefined;
 
   constructor(
     private readonly client: WebSocket,
@@ -154,6 +167,9 @@ export class RealtimeBridge {
     };
     this.log = options.logger;
     this.context = options.context ?? {};
+    this.observeClientFrame = options.observeClientFrame;
+    this.observeEngineFrame = options.observeEngineFrame;
+    this.onDisposedCallback = options.onDisposed;
 
     // The read side is deliberately left running while the engine is dialled.
     // Pausing it would look tidier, but `ws` does not resume a paused socket in
@@ -235,6 +251,7 @@ export class RealtimeBridge {
   dispose(code = 1000, reason = ''): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.onDisposedCallback?.();
 
     this.upstreamGuard?.stop();
     this.downstreamGuard?.stop();
@@ -264,8 +281,21 @@ export class RealtimeBridge {
     this.client.terminate();
   }
 
+  /**
+   * Pushes a frame toward the client that the engine did not send — the hook
+   * `DeltaSynthesizer` uses to deliver a synthesized delta. Bypasses the
+   * downstream flow guard: these frames are small and infrequent by
+   * construction, so it is not worth coupling synthesis to the backpressure
+   * state of the engine's own frames.
+   */
+  sendSynthesizedFrame(frame: RealtimeFrame): void {
+    if (this.disposed || this.client.readyState !== OPEN) return;
+    this.client.send(frame.data, { binary: frame.isBinary });
+  }
+
   private onEngineFrame(frame: RealtimeFrame): void {
     if (this.disposed || this.client.readyState !== OPEN) return;
+    this.observeEngineFrame?.(frame);
     this.client.send(frame.data, { binary: frame.isBinary });
     this.downstreamGuard?.afterSend();
   }
@@ -273,6 +303,7 @@ export class RealtimeBridge {
   private readonly onClientMessage = (data: Buffer, isBinary: boolean): void => {
     if (this.disposed) return;
     const frame: RealtimeFrame = { data: isBinary ? data : data.toString(), isBinary };
+    this.observeClientFrame?.(frame);
 
     const session = this.session;
     if (session === undefined) {

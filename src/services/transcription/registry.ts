@@ -1,7 +1,7 @@
 import { CustomBaseUrlTranscriptionProvider } from './providers/custom-base-url.js';
 import { OpenAITranscriptionProvider } from './providers/openai.js';
 import { OpenAIRealtimeTranscriptionProvider } from './realtime/openai-realtime.js';
-import type { RealtimeTranscriptionProvider } from './realtime/types.js';
+import type { RealtimeGranularity, RealtimeTranscriptionProvider } from './realtime/types.js';
 import {
   hasCapability,
   readTranscriptionServers,
@@ -53,6 +53,11 @@ export interface TranscriptionServerSummary {
     protocol: string;
     path: string;
     audio: typeof REALTIME_AUDIO_FORMAT;
+    /**
+     * How early this server can produce text. A client auto-choosing a server
+     * should prefer `native-delta` over `synthesized-delta` over `utterance`.
+     */
+    granularity: RealtimeGranularity;
   } | null;
 }
 
@@ -183,6 +188,7 @@ export class TranscriptionServerRegistry {
             protocol: this.realtimeProvider(config.id).name,
             path: `${REALTIME_STREAM_PATH}?server=${encodeURIComponent(config.id)}`,
             audio: REALTIME_AUDIO_FORMAT,
+            granularity: resolveGranularity(config, this.realtimeProvider(config.id)),
           }
         : null,
     };
@@ -247,4 +253,22 @@ export class TranscriptionServerRegistry {
     }
     return config;
   }
+}
+
+/**
+ * The granularity actually reported to clients for a realtime-capable server:
+ * a provider that natively streams deltas wins over configured synthesis
+ * (there is nothing for synthesis to add), which in turn wins over the bare
+ * utterance-level default every provider gets without setting anything.
+ */
+export function resolveGranularity(
+  config: TranscriptionServerConfig,
+  provider: RealtimeTranscriptionProvider,
+): RealtimeGranularity {
+  // The operator's explicit declaration wins: a generic provider cannot know
+  // that the engine behind it emits native deltas.
+  if (config.granularity) return config.granularity;
+  if (provider.granularity === 'native-delta') return 'native-delta';
+  if (config.synthesizeDeltas) return 'synthesized-delta';
+  return provider.granularity ?? 'utterance';
 }

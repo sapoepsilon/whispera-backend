@@ -55,6 +55,7 @@ export {
   REALTIME_STREAM_PATH,
   PROBE_CACHE_MS,
   PROBE_TIMEOUT_MS,
+  resolveGranularity,
 } from './registry.js';
 export type {
   TranscriptionServerSummary,
@@ -68,7 +69,9 @@ export type {
   RealtimeSessionListeners,
   RealtimeTranscriptionProvider,
   RealtimeTranscriptionSession,
+  RealtimeGranularity,
 } from './realtime/types.js';
+export { REALTIME_GRANULARITIES } from './realtime/types.js';
 
 export {
   OpenAIRealtimeTranscriptionProvider,
@@ -89,3 +92,18 @@ export {
   CLOSE_BACKPRESSURE,
 } from './realtime/proxy.js';
 export type { RealtimeProxyOptions, RealtimeProxyLogger } from './realtime/proxy.js';
+
+export {
+  tokenize,
+  advanceLocalAgreement,
+  INITIAL_AGREEMENT_STATE,
+} from './realtime/local-agreement.js';
+export type { AgreementState, AgreementStep } from './realtime/local-agreement.js';
+
+export { pcm16ToWav } from './realtime/wav.js';
+
+export { DeltaSynthesizer } from './realtime/delta-synthesizer.js';
+export type {
+  DeltaSynthesizerOptions,
+  DeltaSynthesizerLogger,
+} from './realtime/delta-synthesizer.js';

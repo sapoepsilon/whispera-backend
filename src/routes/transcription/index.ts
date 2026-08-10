@@ -6,12 +6,14 @@ import {
   REALTIME_AUDIO_FORMAT,
   TranscriptionServerRegistry,
 } from '../../services/transcription/registry.js';
+import { DeltaSynthesizer } from '../../services/transcription/realtime/delta-synthesizer.js';
 import {
   CLOSE_BAD_REQUEST,
   CLOSE_UNKNOWN_SERVER,
   CLOSE_UPSTREAM_FAILED,
   RealtimeBridge,
 } from '../../services/transcription/realtime/proxy.js';
+import { REALTIME_GRANULARITIES } from '../../services/transcription/realtime/types.js';
 import { TRANSCRIPTION_CAPABILITIES } from '../../services/transcription/servers.js';
 
 const realtimeAudioSchema = z.object({
@@ -35,6 +37,7 @@ const serverSchema = z.object({
       protocol: z.string(),
       path: z.string(),
       audio: realtimeAudioSchema,
+      granularity: z.enum(REALTIME_GRANULARITIES),
     })
     .nullable(),
 });
@@ -80,7 +83,13 @@ export default async function transcriptionRoutes(app: FastifyInstance) {
           'server is indistinguishable from one that was never configured. ' +
           'Base URLs and API keys are never returned. ' +
           'A server advertising the `realtime` capability can be streamed to over ' +
-          'WS /transcription/stream using the audio format given in `realtime.audio`.',
+          'WS /transcription/stream using the audio format given in `realtime.audio`. ' +
+          '`realtime.granularity` says how early that server can produce useful text: ' +
+          '`native-delta` (the engine streams its own deltas), `synthesized-delta` (this proxy ' +
+          "re-transcribes the growing utterance buffer through the server's own batch endpoint " +
+          'and confirms a growing prefix via LocalAgreement-2), or `utterance` (transcript ' +
+          'text only arrives once the engine finalises the turn). A client auto-choosing a ' +
+          'server should prefer native-delta, then synthesized-delta, then utterance.',
         security: [{ bearerAuth: [] }],
         response: { 200: serversResponseSchema },
       },
@@ -115,9 +124,19 @@ export default async function transcriptionRoutes(app: FastifyInstance) {
       const serverId = query.server ?? registry.defaultServer.id;
       const context = { userId: request.userId, serverId };
 
-      // Built before the engine is dialled so a client that drops mid-handshake
-      // still tears down whatever connection it triggered.
-      const bridge = new RealtimeBridge(socket, { logger: app.log, context });
+      // Assigned below, once the server config is known to want synthesis.
+      // Declared first so the bridge's observer hooks can close over it —
+      // both need each other, and the bridge has to exist before an engine is
+      // dialled so a client that drops mid-handshake is still torn down.
+      let synthesizer: DeltaSynthesizer | undefined;
+
+      const bridge = new RealtimeBridge(socket, {
+        logger: app.log,
+        context,
+        observeClientFrame: (frame) => synthesizer?.onClientFrame(frame),
+        observeEngineFrame: (frame) => synthesizer?.onEngineFrame(frame),
+        onDisposed: () => synthesizer?.stop(),
+      });
 
       const config = registry.get(serverId);
       if (!config) {
@@ -139,6 +158,17 @@ export default async function transcriptionRoutes(app: FastifyInstance) {
         return;
       }
 
+      if (config.synthesizeDeltas) {
+        synthesizer = new DeltaSynthesizer({
+          batchProvider: registry.batchProvider(serverId),
+          sampleRate: REALTIME_AUDIO_FORMAT.sampleRate,
+          channels: REALTIME_AUDIO_FORMAT.channels,
+          send: (frame) => bridge.sendSynthesizedFrame(frame),
+          logger: app.log,
+          context,
+        });
+      }
+
       try {
         const session = await registry.realtimeProvider(serverId).connect(
           {
@@ -148,8 +178,10 @@ export default async function transcriptionRoutes(app: FastifyInstance) {
           bridge.listeners,
         );
         bridge.attach(session);
+        synthesizer?.start();
         app.log.info({ ...context, engine: session.provider }, 'realtime transcription session open');
       } catch (error) {
+        synthesizer?.stop();
         app.log.error({ ...context, err: error }, 'failed to reach the transcription engine');
         bridge.fail(
           CLOSE_UPSTREAM_FAILED,

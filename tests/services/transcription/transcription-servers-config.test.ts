@@ -161,6 +161,45 @@ describe('readTranscriptionServers — failing fast', () => {
   });
 });
 
+describe('readTranscriptionServers — synthesizeDeltas', () => {
+  it('defaults to false when omitted', () => {
+    const [speaches] = readTranscriptionServers(servers([SPEACHES]));
+    expect(speaches.synthesizeDeltas).toBe(false);
+  });
+
+  it('accepts the flag when the server also has batch', () => {
+    const [speaches] = readTranscriptionServers(
+      servers([{ ...SPEACHES, synthesizeDeltas: true }]),
+    );
+    expect(speaches.synthesizeDeltas).toBe(true);
+  });
+
+  it('accepts the flag on a bare entry, which defaults to batch', () => {
+    const [bare] = readTranscriptionServers(servers([{ id: 'x', synthesizeDeltas: true }]));
+    expect(bare.capabilities).toEqual(['batch']);
+    expect(bare.synthesizeDeltas).toBe(true);
+  });
+
+  it('rejects the flag on a server with only realtime, since there is no batch endpoint to synthesize against', () => {
+    expect(() =>
+      readTranscriptionServers(
+        servers([{ id: 'x', capabilities: ['realtime'], synthesizeDeltas: true }]),
+      ),
+    ).toThrow(/synthesizeDeltas requires the "batch" capability/);
+  });
+
+  it('rejects a non-boolean value', () => {
+    expect(() =>
+      readTranscriptionServers(servers([{ id: 'x', synthesizeDeltas: 'yes' }])),
+    ).toThrow(/not a valid server list/);
+  });
+
+  it('never sets it for the legacy single-server env, even implicitly', () => {
+    const [only] = readTranscriptionServers({});
+    expect(only.synthesizeDeltas).toBe(false);
+  });
+});
+
 describe('resolveBaseUrl', () => {
   it('uses the server base URL when it has one', () => {
     const [speaches] = readTranscriptionServers(servers([SPEACHES]));
@@ -172,5 +211,33 @@ describe('resolveBaseUrl', () => {
 
     expect(resolveBaseUrl(bare, { OPENAI_BASE_URL: 'http://proxy/v1' })).toBe('http://proxy/v1');
     expect(resolveBaseUrl(bare, {})).toBe(OPENAI_DEFAULT_BASE_URL);
+  });
+});
+
+
+describe('explicit granularity override', () => {
+  it('carries a declared native-delta through to the config', () => {
+    const servers = readTranscriptionServers({
+      TRANSCRIPTION_SERVERS: JSON.stringify([
+        {
+          id: 'nemo-stream',
+          baseUrl: 'http://192.168.50.38:8001/v1',
+          model: 'nvidia/nemotron-3.5-asr-streaming-0.6b',
+          capabilities: ['realtime'],
+          granularity: 'native-delta',
+        },
+      ]),
+    });
+    expect(servers[0].granularity).toBe('native-delta');
+  });
+
+  it('rejects an unknown granularity value', () => {
+    expect(() =>
+      readTranscriptionServers({
+        TRANSCRIPTION_SERVERS: JSON.stringify([
+          { id: 'x', baseUrl: 'http://h/v1', granularity: 'word-by-word' },
+        ]),
+      }),
+    ).toThrow();
   });
 });

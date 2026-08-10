@@ -42,6 +42,22 @@ export interface TranscriptionServerConfig {
   readonly model: string;
   readonly capabilities: readonly TranscriptionCapability[];
   readonly realtimePath: string;
+  /**
+   * Opt-in synthesized-delta mode (see `DeltaSynthesizer`): re-transcribes the
+   * growing utterance buffer against this server's own batch endpoint and
+   * emits LocalAgreement-2-confirmed deltas ahead of the engine's own
+   * utterance-level result. Only ever true when `batch` is also configured —
+   * synthesis has nowhere to send its re-transcription requests otherwise.
+   */
+  readonly synthesizeDeltas: boolean;
+  /**
+   * Explicit granularity override. An engine that emits its own deltas (the
+   * NeMo streaming shim) has no way to say so through a generic
+   * OpenAI-Realtime provider, so the operator states it here. Absent, the
+   * granularity is derived: synthesis on -> synthesized-delta, else whatever
+   * the provider declares, else utterance.
+   */
+  readonly granularity?: 'native-delta' | 'synthesized-delta' | 'utterance';
 }
 
 export interface TranscriptionServersEnv {
@@ -64,6 +80,8 @@ const serverEntrySchema = z
     model: trimmed.optional(),
     capabilities: z.array(z.enum(TRANSCRIPTION_CAPABILITIES)).min(1).optional(),
     realtimePath: trimmed.optional(),
+    synthesizeDeltas: z.boolean().optional(),
+    granularity: z.enum(['native-delta', 'synthesized-delta', 'utterance']).optional(),
   })
   .strict();
 
@@ -108,6 +126,16 @@ function toConfig(entry: TranscriptionServerEntry): TranscriptionServerConfig {
   const baseUrl = entry.baseUrl
     ? assertHttpUrl(entry.baseUrl, `TRANSCRIPTION_SERVERS[${entry.id}].baseUrl`)
     : undefined;
+  const capabilities = entry.capabilities ?? ['batch'];
+  const synthesizeDeltas = entry.synthesizeDeltas ?? false;
+  const granularity = entry.granularity;
+
+  if (synthesizeDeltas && !capabilities.includes('batch')) {
+    throw new Error(
+      `TRANSCRIPTION_SERVERS[${entry.id}].synthesizeDeltas requires the "batch" capability, ` +
+        `since synthesis re-transcribes through the server's own batch endpoint.`,
+    );
+  }
 
   return {
     id: entry.id,
@@ -115,8 +143,10 @@ function toConfig(entry: TranscriptionServerEntry): TranscriptionServerConfig {
     ...(baseUrl ? { baseUrl } : {}),
     ...(entry.apiKey ? { apiKey: entry.apiKey } : {}),
     model: entry.model ?? DEFAULT_TRANSCRIPTION_MODEL,
-    capabilities: entry.capabilities ?? ['batch'],
+    capabilities,
     realtimePath: entry.realtimePath ?? DEFAULT_REALTIME_PATH,
+    synthesizeDeltas,
+    ...(granularity ? { granularity } : {}),
   };
 }
 
@@ -148,6 +178,7 @@ function synthesiseLegacyServer(env: TranscriptionServersEnv): TranscriptionServ
       model: readOptional(env.TRANSCRIPTION_MODEL) ?? DEFAULT_TRANSCRIPTION_MODEL,
       capabilities: ['batch'],
       realtimePath: DEFAULT_REALTIME_PATH,
+      synthesizeDeltas: false,
     };
   }
 
@@ -160,6 +191,7 @@ function synthesiseLegacyServer(env: TranscriptionServersEnv): TranscriptionServ
     model: readOptional(env.TRANSCRIPTION_MODEL) ?? DEFAULT_TRANSCRIPTION_MODEL,
     capabilities: ['batch'],
     realtimePath: DEFAULT_REALTIME_PATH,
+    synthesizeDeltas: false,
   };
 }
 

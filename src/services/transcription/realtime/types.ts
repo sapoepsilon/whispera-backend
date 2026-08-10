@@ -19,6 +19,25 @@ export interface RealtimeFrame {
   isBinary: boolean;
 }
 
+/**
+ * How early a realtime engine can produce useful text, in order of
+ * preference for a client auto-choosing a server.
+ *
+ * - `native-delta`: the engine emits its own
+ *   `conversation.item.input_audio_transcription.delta` frames while the
+ *   speaker is still talking. No provider does this yet; the value exists so
+ *   a future streaming-native engine (e.g. a NeMo checkpoint) has somewhere
+ *   to report it without another discovery-schema change.
+ * - `synthesized-delta`: nothing native streams, but the proxy re-transcribes
+ *   the growing utterance buffer against the server's own batch endpoint and
+ *   emits LocalAgreement-2-confirmed deltas ahead of the engine's own
+ *   utterance-level result. See `DeltaSynthesizer`.
+ * - `utterance`: text arrives only once the engine finalises the turn — every
+ *   OpenAI-Realtime-compatible engine today, absent synthesis.
+ */
+export const REALTIME_GRANULARITIES = ['native-delta', 'synthesized-delta', 'utterance'] as const;
+export type RealtimeGranularity = (typeof REALTIME_GRANULARITIES)[number];
+
 export interface RealtimeConnectOptions {
   /** Engine-side model id, forwarded as the `model` query parameter. */
   model: string;
@@ -57,6 +76,12 @@ export interface RealtimeTranscriptionSession {
 export interface RealtimeTranscriptionProvider {
   /** Value reported as the engine's identity to clients and logs. */
   readonly name: string;
+  /**
+   * This provider's own streaming granularity, absent synthesis. Undefined is
+   * equivalent to `'utterance'` — every provider today gets that for free by
+   * simply not setting it.
+   */
+  readonly granularity?: RealtimeGranularity;
   /**
    * Resolves once the upstream session is established. Rejects if the engine
    * refuses the handshake, so the caller can answer the client honestly instead

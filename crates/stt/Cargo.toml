@@ -4,5 +4,19 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+description = "Transcription server registry/config, LocalAgreement-2 and synthesized-delta logic for the Whispera backend (no HTTP/WebSocket I/O)."
+
+[lib]
+name = "whispera_stt"
 
 [dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
+base64.workspace = true
+rand.workspace = true
+url = "2.5"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }

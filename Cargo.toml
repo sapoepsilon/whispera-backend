@@ -8,6 +8,7 @@ members = [
     "crates/apns",
     "crates/stt",
     "crates/server",
+    "crates/dev-idp",
 ]
 
 [workspace.package]
@@ -25,6 +26,7 @@ whispera-store = { path = "crates/store", default-features = false }
 whispera-relay = { path = "crates/relay" }
 whispera-apns = { path = "crates/apns" }
 whispera-stt = { path = "crates/stt" }
+whispera-dev-idp = { path = "crates/dev-idp" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

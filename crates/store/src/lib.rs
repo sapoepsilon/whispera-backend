@@ -304,6 +304,26 @@ impl Store {
         Ok(n > 0)
     }
 
+    /// Set (`Some((token, env))`) or clear (`None`) an active device's APNs
+    /// registration. Returns false if the device is unknown or revoked.
+    pub async fn set_apns(&self, device_id: &str, apns: Option<(&str, &str)>) -> Result<bool> {
+        let (token, env) = match apns {
+            Some((t, e)) => (Some(t), Some(e)),
+            None => (None, None),
+        };
+        Ok(sqlx::query(
+            "UPDATE devices SET apns_token = $1, apns_env = $2 \
+             WHERE id = $3 AND revoked_at IS NULL",
+        )
+        .bind(token)
+        .bind(env)
+        .bind(device_id)
+        .execute(&self.pool)
+        .await?
+        .rows_affected()
+            > 0)
+    }
+
     /// Forget a device's APNs token (after APNs says it is unregistered).
     /// Only clears it if it still equals `token`.
     pub async fn clear_apns_token(&self, device_id: &str, token: &str) -> Result<()> {

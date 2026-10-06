@@ -10,6 +10,7 @@
 //! | GET | `/v1/devices` | account bearer |
 //! | DELETE | `/v1/devices/{id}` | account bearer |
 //! | GET | `/v1/device/peers` | WL1 device |
+//! | PUT | `/v1/device/apns` | WL1 device |
 //! | POST | `/v1/relay/send` | WL1 device |
 //! | GET | `/v1/relay/messages` | WL1 device (long-poll with `wait`) |
 //! | POST | `/v1/relay/ack` | WL1 device |
@@ -29,7 +30,7 @@ use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{HeaderMap, Method, StatusCode, Uri};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -42,7 +43,7 @@ use whispera_proto::sign::{self, SignedHeaders};
 use whispera_proto::wire::{
     apns_token_suffix, push_status, ApnsEnv, DeviceList, Health, NotifyRequest, NotifyResponse,
     PublicDevice, RegisterDeviceRequest, RelayAckRequest, RelayAckResponse, RelayFetchResponse,
-    RelaySendRequest,
+    RelaySendRequest, UpdateApnsRequest,
 };
 use whispera_proto::{ErrorCode, ErrorEnvelope};
 use whispera_relay::{DeviceAuth, Relay, RelayError, RelayLimits};
@@ -239,6 +240,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/devices", post(register_device).get(list_devices))
         .route("/v1/devices/{id}", delete(revoke_device))
         .route("/v1/device/peers", get(peers))
+        .route("/v1/device/apns", put(update_apns))
         .route("/v1/relay/send", post(relay_send))
         .route("/v1/relay/messages", get(relay_fetch))
         .route("/v1/relay/ack", post(relay_ack))
@@ -489,6 +491,37 @@ async fn peers(
 ) -> ApiResult<Json<DeviceList>> {
     let dev = signed(&state, &method, &uri, &headers, &body).await?;
     Ok(Json(device_list(&state, &dev.account_id).await?))
+}
+
+/// Set or clear the calling device's APNs registration; returns its public record.
+async fn update_apns(
+    State(state): State<AppState>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> ApiResult<Json<PublicDevice>> {
+    let dev = signed(&state, &method, &uri, &headers, &body).await?;
+    let req: UpdateApnsRequest = json_body(&body)?;
+    let token = match &req.apns {
+        Some(a) if !is_apns_token(&a.token) => {
+            return Err(ApiError::bad("apns.token must be 64-200 hex characters"))
+        }
+        Some(a) => Some((a.token.to_ascii_lowercase(), a.env.as_str())),
+        None => None,
+    };
+    let set = token.as_ref().map(|(t, e)| (t.as_str(), *e));
+    if !state.store.set_apns(&dev.id, set).await? {
+        // Revoked between signature check and update.
+        return Err(ApiError::code(ErrorCode::AuthRevoked));
+    }
+    let updated = state
+        .store
+        .get_device(&dev.id)
+        .await?
+        .ok_or_else(|| ApiError::code(ErrorCode::AuthRevoked))?;
+    tracing::info!(device = %dev.id, set = set.is_some(), "APNs registration updated");
+    Ok(Json(public_device(&updated)))
 }
 
 async fn relay_send(

@@ -48,3 +48,6 @@ http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }
 base64.workspace = true
 async-trait.workspace = true
+whispera-dev-idp.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+url = "2"

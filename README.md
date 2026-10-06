@@ -24,9 +24,10 @@ The previous TypeScript backend is archived under [`legacy/`](legacy/) for refer
 | `crates/auth` | Account auth: generic OIDC (discovery + JWKS) or static hashed tokens |
 | `crates/store` | sqlx persistence: `accounts`, `devices`, `mailbox` (SQLite / Postgres) |
 | `crates/relay` | E2E mailbox (TTL, size and per-device quota caps) and WL1 device auth |
-| `crates/apns` | APNs token auth (ES256), HTTP/2 client, content-free payload |
+| `crates/apns` | APNs token auth (ES256), HTTP/2 client, payloads only from a typed push kind |
 | `crates/stt` | Transcription server registry + LocalAgreement-2 synthesized deltas (ported from TS) |
 | `crates/server` | axum binary `whispera-server` |
+| `crates/apns-mock` | **dev/test only**: `whispera-apns-mock`, a local APNs endpoint that records pushes as JSONL |
 | `crates/dev-idp` | **dev/test only**: `whispera-dev-idp`, a loopback OIDC provider for local sign-in |
 
 ## Self-hosting
@@ -76,6 +77,7 @@ variables, which win. Empty variables are ignored.
 | `WHISPERA_OIDC_ALLOWED_ALGS` | e.g. `ES384` | `RS256,ES256` |
 | `APNS_AUTH_KEY_P8_FILE` or `APNS_AUTH_KEY_P8` | APNs `.p8` key (path, or PEM contents) | push off |
 | `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_TOPIC` | APNs key id, team id, app bundle id | push off |
+| `APNS_SANDBOX_URL` / `APNS_PRODUCTION_URL` | Send that environment's pushes to this URL instead of Apple (mock switch, see below) | Apple |
 | `RUST_LOG` | Log filter | `info` |
 
 Relay caps (TOML `[relay]`): 64 KiB per ciphertext, TTL 1 day by default and
@@ -113,10 +115,12 @@ Discovery and JWKS URLs must be `https` (plain `http` is allowed only for loopba
 
 Push is optional; without `APNS_*` (or an `[apns]` TOML section) it is disabled
 and `/v1/notify` answers `{"push":"unconfigured"}`. With it, the server signs an
-ES256 provider token (cached ~50 min) and talks HTTP/2 to Apple. Every push is the
-same fixed, content-free alert (no request details ever leave the server). Tokens
-Apple reports as unregistered (`410`, `BadDeviceToken`) are deleted. The key is
-never logged.
+ES256 provider token (cached ~50 min) and talks HTTP/2 to Apple. Payloads are
+built only from a typed push kind (legacy alert, approval, approval.resolved):
+fixed strings plus a validated `request_id` and, for named approvals, an opaque
+end-to-end sealed blob the server cannot read. No free text from a request ever
+reaches a push. Tokens Apple reports as unregistered (`410`, `BadDeviceToken`)
+are deleted. The key is never logged.
 
 ```sh
 APNS_AUTH_KEY_P8_FILE=/run/secrets/apns.p8   # mount AuthKey_XXXX.p8 read-only
@@ -124,6 +128,47 @@ APNS_KEY_ID=ABC123DEFG
 APNS_TEAM_ID=TEAM123456
 APNS_TOPIC=com.example.whispera              # the iOS app bundle id
 ```
+
+#### Mock switch: `whispera-apns-mock`
+
+To test push end to end without Apple, point the APNs client at the bundled
+mock. `[apns] sandbox_url` / `production_url` (or `APNS_SANDBOX_URL` /
+`APNS_PRODUCTION_URL`) replace Apple's endpoint for that environment; omitted
+means Apple. The server logs at startup which endpoint each environment uses
+(`Apple` or `custom URL …`). A key is still required (any P-256 PKCS#8 key works
+against the mock), so real delivery needs a real APNs key on a hosted backend
+with the URLs left unset.
+
+```sh
+# throwaway key (never commit it)
+openssl ecparam -name prime256v1 -genkey -noout | openssl pkcs8 -topk8 -nocrypt -out key.p8
+openssl ec -in key.p8 -pubout -out key.pub.pem
+
+cargo run -p whispera-apns-mock -- --listen 127.0.0.1:18082 --log pushes.jsonl \
+    --public-key key.pub.pem \
+    [--exec 'sh -c "xcrun simctl push booted com.example.whispera -" _'] \
+    [--unregistered <token-suffix>]
+```
+
+```toml
+[apns]
+key_path = "key.p8"
+key_id = "ABC123DEFG"
+team_id = "TEAM123456"
+topic = "com.example.whispera"
+sandbox_url = "http://127.0.0.1:18082"      # omit for Apple
+# production_url = "http://127.0.0.1:18082/production"
+```
+
+The mock answers `200` (`410 Unregistered` for tokens ending in an
+`--unregistered` suffix, `403 InvalidProviderToken` when `--public-key` is set and
+the JWT does not verify) and appends one JSON line per request:
+`{"ts","path_token_suffix","token","env","headers":{apns-*},"jwt_ok","payload"}`.
+`env` comes from a leading `/sandbox` or `/production` path segment, else
+`--env` (default `sandbox`). `--exec '<cmd>'` runs `<cmd> <token>` with the
+payload JSON on stdin (the `sh -c "…" _` wrapper above drops the token argument
+for commands that don't take it). `crates/server/tests/apns_mock_e2e.rs` runs the real
+server binary against it.
 
 ### Postgres
 
@@ -182,7 +227,15 @@ All bodies are JSON. Errors use one envelope:
 | `GET /v1/relay/messages?after=N&limit=L&wait=S` | device | — | `200 {"messages":[{"seq","from","ciphertext","created_at","expires_at"}]}`; with `wait`, long-polls up to S s (max 30) |
 | `POST /v1/relay/ack` | device | `{"up_to_seq":N}` | `200 {"deleted":n}` |
 | `GET /v1/relay/stream?after=N` | device | — | `text/event-stream`: `event: message`, `id: <seq>`, `data: <message JSON>`; resumes from `Last-Event-ID`; ends when the device is revoked |
-| `POST /v1/notify` | device | `{"device_id":"dev_…"}` | `200 {"push":"sent"\|"unconfigured"\|"no_token"\|"failed"}`; `404` if not an active device of the same account |
+| `POST /v1/notify` | device | `{"device_id":"dev_…","kind"?:"approval"\|"approval.resolved","request_id"?:"apr_[a-z0-9]{8,64}","sealed"?:"<std base64 ≤ 2048, kind approval only>"}`; unknown fields rejected | `200 {"push":"sent"\|"unconfigured"\|"no_token"\|"failed"}`; `400 bad_request` on a bad combination or format; `404` if not an active device of the same account |
+
+`/v1/notify` APNs payloads (`kind` absent = legacy):
+
+| kind | payload | headers |
+|---|---|---|
+| — | `{"aps":{"alert":{"title":"Whispera","body":"You have a new request"},"sound":"default"}}` | `alert`, priority 10, expiration +3600 s |
+| `approval` | `{"aps":{"alert":{"title":"Whispera","body":"Approval requested"},"sound":"default","category":"WL_APPROVAL","thread-id":"wl-approvals"},"wl":{"kind":"approval","request_id":"apr_…"}}`; with `sealed` also `"aps":{"mutable-content":1}` and `"wl":{"sealed":"…"}` | `alert`, priority 10, `apns-collapse-id: <request_id>`, expiration +300 s |
+| `approval.resolved` | `{"aps":{"content-available":1},"wl":{"kind":"approval.resolved","request_id":"apr_…"}}` | `background`, priority 5, expiration +300 s |
 
 A device object:
 

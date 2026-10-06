@@ -93,6 +93,28 @@ pub struct ApnsFileConfig {
     pub key_id: String,
     pub team_id: String,
     pub topic: String,
+    /// Replace Apple's sandbox endpoint (e.g. `http://127.0.0.1:18082` for
+    /// `whispera-apns-mock`). Omitted = Apple.
+    #[serde(default)]
+    pub sandbox_url: Option<String>,
+    /// Replace Apple's production endpoint. Omitted = Apple.
+    #[serde(default)]
+    pub production_url: Option<String>,
+}
+
+/// Effective APNs endpoint overrides (`[apns] sandbox_url` / `production_url`,
+/// overridden by `APNS_SANDBOX_URL` / `APNS_PRODUCTION_URL`). `None` = Apple.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ApnsEndpoints {
+    pub sandbox_url: Option<String>,
+    pub production_url: Option<String>,
+}
+
+impl ApnsEndpoints {
+    /// True when either endpoint points somewhere other than Apple.
+    pub fn is_custom(&self) -> bool {
+        self.sandbox_url.is_some() || self.production_url.is_some()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -120,6 +142,9 @@ pub struct Config {
     pub relay: RelayConfig,
     #[serde(default)]
     pub apns: Option<ApnsFileConfig>,
+    /// Filled from `[apns]` and the environment by [`Config::load`].
+    #[serde(skip)]
+    pub apns_endpoints: ApnsEndpoints,
 }
 
 fn list(v: &str) -> Vec<String> {
@@ -152,7 +177,14 @@ impl Config {
     }
 
     pub fn from_toml(text: &str) -> Result<Self, ConfigError> {
-        toml::from_str(text).map_err(|e| ConfigError::Toml(e.to_string()))
+        let mut cfg: Config = toml::from_str(text).map_err(|e| ConfigError::Toml(e.to_string()))?;
+        if let Some(a) = &cfg.apns {
+            cfg.apns_endpoints = ApnsEndpoints {
+                sandbox_url: a.sandbox_url.clone(),
+                production_url: a.production_url.clone(),
+            };
+        }
+        Ok(cfg)
     }
 
     fn apply_env(&mut self, get: &impl Fn(&str) -> Option<String>) -> Result<(), ConfigError> {
@@ -173,6 +205,12 @@ impl Config {
         }
         if let Some(v) = get("WHISPERA_RATE_LIMIT_BURST") {
             self.rate_limit.burst = v.parse().map_err(|_| bad("WHISPERA_RATE_LIMIT_BURST"))?;
+        }
+        if let Some(v) = get("APNS_SANDBOX_URL") {
+            self.apns_endpoints.sandbox_url = Some(v);
+        }
+        if let Some(v) = get("APNS_PRODUCTION_URL") {
+            self.apns_endpoints.production_url = Some(v);
         }
         let tokens = get("WHISPERA_STATIC_TOKENS");
         let issuer = get("WHISPERA_OIDC_ISSUER");
@@ -231,6 +269,18 @@ impl Config {
         }
         if self.rate_limit.per_second > 0.0 && self.rate_limit.burst == 0 {
             return Err(ConfigError::Invalid("rate_limit.burst must be >= 1".into()));
+        }
+        for (name, url) in [
+            ("sandbox_url", &self.apns_endpoints.sandbox_url),
+            ("production_url", &self.apns_endpoints.production_url),
+        ] {
+            if let Some(u) = url {
+                if !(u.starts_with("http://") || u.starts_with("https://")) {
+                    return Err(ConfigError::Invalid(format!(
+                        "apns {name} must start with http:// or https://"
+                    )));
+                }
+            }
         }
         let l = self.relay.limits();
         if l.max_ciphertext_bytes == 0 || l.default_ttl_s == 0 || l.fetch_limit < 1 {
@@ -320,6 +370,66 @@ mod tests {
         assert_eq!(c.relay.limits().max_ttl_s, 60);
         assert_eq!(c.rate_limit.burst, 10);
         assert!(c.apns.is_some());
+        assert!(!c.apns_endpoints.is_custom());
         assert!(Config::from_toml("bogus = 1").is_err());
+    }
+
+    #[test]
+    fn apns_mock_switch() {
+        let dir = std::env::temp_dir().join(format!("whispera-cfg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("c.toml");
+        std::fs::write(
+            &path,
+            r#"
+            [auth]
+            mode = "static"
+            tokens = []
+            [apns]
+            key_path = "/k.p8"
+            key_id = "K"
+            team_id = "T"
+            topic = "t"
+            sandbox_url = "http://127.0.0.1:18082"
+            "#,
+        )
+        .unwrap();
+        let p = path.to_str().unwrap();
+        let h = whispera_auth::hash_token("t");
+        let tokens = format!("me:{h}");
+        let c = Config::load(env(&[
+            ("WHISPERA_CONFIG", p),
+            ("WHISPERA_STATIC_TOKENS", &tokens),
+        ]))
+        .unwrap();
+        assert_eq!(
+            c.apns_endpoints,
+            ApnsEndpoints {
+                sandbox_url: Some("http://127.0.0.1:18082".into()),
+                production_url: None
+            }
+        );
+        let c = Config::load(env(&[
+            ("WHISPERA_CONFIG", p),
+            ("WHISPERA_STATIC_TOKENS", &tokens),
+            ("APNS_SANDBOX_URL", "http://127.0.0.1:9"),
+            ("APNS_PRODUCTION_URL", "http://127.0.0.1:10/production"),
+        ]))
+        .unwrap();
+        assert_eq!(
+            c.apns_endpoints.sandbox_url.as_deref(),
+            Some("http://127.0.0.1:9")
+        );
+        assert_eq!(
+            c.apns_endpoints.production_url.as_deref(),
+            Some("http://127.0.0.1:10/production")
+        );
+        let e = Config::load(env(&[
+            ("WHISPERA_STATIC_TOKENS", &tokens),
+            ("APNS_SANDBOX_URL", "ftp://x"),
+        ]))
+        .unwrap_err();
+        assert!(e.to_string().contains("sandbox_url"));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

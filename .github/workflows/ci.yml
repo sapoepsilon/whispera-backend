@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: fmt
+        run: cargo fmt --all --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: clippy (postgres feature)
+        run: cargo clippy -p whispera-store -p whispera-server --all-targets --features postgres -- -D warnings
+      - name: test
+        run: cargo test --workspace
+      - name: test store on Postgres
+        env:
+          WHISPERA_TEST_POSTGRES_URL: postgres://postgres:test@localhost:5432/postgres
+        run: cargo test -p whispera-store --features postgres
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: docker build
+        run: docker build -t whispera-server:ci .

@@ -1,0 +1,34 @@
+# Self-hosted Whispera server with SQLite on a named volume.
+#
+#   docker compose run --rm whispera gen-token me   # prints a token + its WHISPERA_STATIC_TOKENS entry
+#   echo 'WHISPERA_STATIC_TOKENS=me:<sha256>' > .env
+#   docker compose up -d
+#
+# For OIDC instead, set WHISPERA_OIDC_ISSUER (+ AUDIENCES or AUTHORIZED_PARTIES) in .env.
+# For push, set APNS_KEY_ID / APNS_TEAM_ID / APNS_TOPIC and mount the .p8 (see README).
+services:
+  whispera:
+    build: .
+    image: whispera-server:local
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      WHISPERA_DATABASE_URL: sqlite:///data/whispera.db
+      WHISPERA_STATIC_TOKENS: ${WHISPERA_STATIC_TOKENS:-}
+      WHISPERA_OIDC_ISSUER: ${WHISPERA_OIDC_ISSUER:-}
+      WHISPERA_OIDC_AUDIENCES: ${WHISPERA_OIDC_AUDIENCES:-}
+      WHISPERA_OIDC_AUTHORIZED_PARTIES: ${WHISPERA_OIDC_AUTHORIZED_PARTIES:-}
+      WHISPERA_OIDC_ALLOWED_ALGS: ${WHISPERA_OIDC_ALLOWED_ALGS:-}
+      WHISPERA_TRUST_PROXY_HEADERS: ${WHISPERA_TRUST_PROXY_HEADERS:-false}
+      APNS_AUTH_KEY_P8_FILE: ${APNS_AUTH_KEY_P8_FILE:-}
+      APNS_KEY_ID: ${APNS_KEY_ID:-}
+      APNS_TEAM_ID: ${APNS_TEAM_ID:-}
+      APNS_TOPIC: ${APNS_TOPIC:-}
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - whispera-data:/data
+      # - ./secrets/AuthKey.p8:/run/secrets/apns.p8:ro   # then APNS_AUTH_KEY_P8_FILE=/run/secrets/apns.p8
+
+volumes:
+  whispera-data:

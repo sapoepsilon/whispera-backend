@@ -1,0 +1,47 @@
+# Example config for whispera-server. Point WHISPERA_CONFIG at a copy of this file.
+# Environment variables override what is set here (see README).
+
+listen = "0.0.0.0:8080"
+database_url = "sqlite:///data/whispera.db"   # or "postgres://user:pass@host/db"
+trust_proxy_headers = false                   # true only behind a proxy that sets X-Forwarded-For
+clock_skew_s = 60
+max_devices_per_account = 50
+max_body_bytes = 262144
+
+# Account auth is required (default-closed). Pick ONE.
+
+# Static tokens: generate with `whispera-server gen-token <name>`.
+[auth]
+mode = "static"
+tokens = [
+  # { account = "me", token_sha256 = "<64 hex chars>" },
+]
+
+# OIDC (any provider with a JWKS):
+# [auth]
+# mode = "oidc"
+# issuer = "https://auth.example.com"
+# audiences = ["whispera"]            # or authorized_parties = [...] for Clerk
+# authorized_parties = []
+# leeway_s = 30
+# jwks_cache_ttl_s = 600
+
+[rate_limit]
+per_second = 20   # per client IP; 0 disables
+burst = 60
+
+[relay]
+max_ciphertext_bytes = 65536
+default_ttl_s = 86400
+max_ttl_s = 604800
+max_messages_per_device = 1000
+max_bytes_per_device = 16777216
+fetch_limit = 100
+max_wait_s = 30
+
+# Push (optional). Without this section (or APNS_* env), push is disabled.
+# [apns]
+# key_path = "/run/secrets/apns.p8"
+# key_id = "ABC123DEFG"
+# team_id = "TEAM123456"
+# topic = "com.example.whispera"

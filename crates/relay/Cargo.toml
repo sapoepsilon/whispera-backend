@@ -1,0 +1,19 @@
+[package]
+name = "whispera-relay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "End-to-end encrypted mailbox relay and WL1 device authentication for the Whispera server."
+
+[dependencies]
+whispera-proto.workspace = true
+whispera-store.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+base64.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+whispera-store = { workspace = true, features = ["sqlite"] }

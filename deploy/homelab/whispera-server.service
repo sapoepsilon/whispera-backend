@@ -1,0 +1,27 @@
+# /etc/systemd/system/whispera-server.service
+# SPDX-License-Identifier: AGPL-3.0-only
+[Unit]
+Description=Whispera server (api.mansurov.dev)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=whispera
+Group=whispera
+# Non-secret settings; see whispera.env.template.
+EnvironmentFile=/etc/whispera/whispera.env
+ExecStart=/usr/local/bin/whispera-server
+Restart=always
+RestartSec=2
+StateDirectory=whispera
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/whispera
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/whispera
+
+[Install]
+WantedBy=multi-user.target

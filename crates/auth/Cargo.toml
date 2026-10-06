@@ -1,0 +1,28 @@
+[package]
+name = "whispera-auth"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Account-level authentication (OIDC JWT or static tokens) for the Whispera server"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+sha2.workspace = true
+base64.workspace = true
+hex.workspace = true
+rand.workspace = true
+subtle.workspace = true
+jsonwebtoken = { version = "9.3", default-features = false }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+url = "2"
+
+[dev-dependencies]
+axum = "0.8"
+p256.workspace = true
+rsa = "0.9"

@@ -1,8 +1,8 @@
-node_modules
-dist
+target/
+node_modules/
+legacy/
+.git/
+*.db
+*.db-*
 .env
-*.log
-.git
-.claude
-.mcp.json
-coverage
+.env.*

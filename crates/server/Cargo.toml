@@ -1,0 +1,50 @@
+[package]
+name = "whispera-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Self-hostable Whispera server: device registry, E2E relay, APNs notify."
+
+[lib]
+name = "whispera_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "whispera-server"
+path = "src/main.rs"
+
+[features]
+default = ["sqlite"]
+sqlite = ["whispera-store/sqlite"]
+postgres = ["whispera-store/postgres"]
+
+[dependencies]
+whispera-proto.workspace = true
+whispera-auth.workspace = true
+whispera-store.workspace = true
+whispera-relay.workspace = true
+whispera-apns.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+base64.workspace = true
+async-trait.workspace = true
+axum = "0.8"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "limit"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+futures-util = "0.3"
+toml = "0.8"
+
+[dev-dependencies]
+tempfile = "3"
+jsonwebtoken = { version = "9.3", default-features = false }
+p256.workspace = true
+rand.workspace = true
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }
+base64.workspace = true
+async-trait.workspace = true

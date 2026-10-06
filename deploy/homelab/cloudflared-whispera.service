@@ -1,0 +1,18 @@
+# /etc/systemd/system/cloudflared-whispera.service
+# Remotely-managed Cloudflare Tunnel; ingress (api.mansurov.dev -> http://127.0.0.1:8080)
+# lives in the tunnel's Cloudflare-side configuration. The token is read from
+# /etc/cloudflared/tunnel.env (TUNNEL_TOKEN=..., 0600 root) so it never appears in argv.
+[Unit]
+Description=Cloudflare Tunnel for whispera-server
+After=network-online.target whispera-server.service
+Wants=network-online.target
+
+[Service]
+Type=notify
+EnvironmentFile=/etc/cloudflared/tunnel.env
+ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel --metrics 127.0.0.1:20241 run
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

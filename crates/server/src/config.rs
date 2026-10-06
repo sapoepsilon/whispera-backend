@@ -280,6 +280,11 @@ impl Config {
                         "apns {name} must start with http:// or https://"
                     )));
                 }
+                if !is_loopback_url(u) {
+                    return Err(ConfigError::Invalid(format!(
+                        "apns {name} override must point at loopback (127.0.0.1, ::1 or localhost)"
+                    )));
+                }
             }
         }
         let l = self.relay.limits();
@@ -288,6 +293,23 @@ impl Config {
         }
         Ok(())
     }
+}
+
+/// True when the URL's host is `localhost`, `127.0.0.1` or `[::1]`.
+fn is_loopback_url(u: &str) -> bool {
+    let rest = u
+        .strip_prefix("http://")
+        .or_else(|| u.strip_prefix("https://"))
+        .unwrap_or("");
+    let auth = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if auth.contains('@') {
+        return false;
+    }
+    let host = match auth.strip_prefix('[') {
+        Some(r) => r.split(']').next().unwrap_or(""),
+        None => auth.split(':').next().unwrap_or(""),
+    };
+    matches!(host, "localhost" | "127.0.0.1" | "::1")
 }
 
 #[cfg(test)]
@@ -430,6 +452,28 @@ mod tests {
         ]))
         .unwrap_err();
         assert!(e.to_string().contains("sandbox_url"));
+        // L14: overrides must be loopback.
+        for bad in [
+            "http://evil.example",
+            "https://api.push.apple.com.evil.example",
+            "http://10.0.0.5:8080",
+            "http://127.0.0.1@evil.example",
+            "http://localhost.evil.example",
+        ] {
+            let e = Config::load(env(&[
+                ("WHISPERA_STATIC_TOKENS", &tokens),
+                ("APNS_PRODUCTION_URL", bad),
+            ]))
+            .unwrap_err();
+            assert!(e.to_string().contains("loopback"), "{bad}: {e}");
+        }
+        for ok in ["http://localhost:1", "http://[::1]:2/x", "http://127.0.0.1"] {
+            Config::load(env(&[
+                ("WHISPERA_STATIC_TOKENS", &tokens),
+                ("APNS_SANDBOX_URL", ok),
+            ]))
+            .unwrap_or_else(|e| panic!("{ok}: {e}"));
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

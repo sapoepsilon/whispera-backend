@@ -1,6 +1,7 @@
-//! Per-client-IP token bucket.
+//! Token bucket, keyed per client IP (default) or any other key (e.g. device id).
 
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Mutex;
 use std::time::Instant;
@@ -13,18 +14,18 @@ use whispera_proto::ErrorCode;
 
 use crate::{ApiError, AppState};
 
-pub struct RateLimiter {
+pub struct RateLimiter<K = IpAddr> {
     per_second: f64,
     burst: f64,
-    buckets: Mutex<Buckets>,
+    buckets: Mutex<Buckets<K>>,
 }
 
-struct Buckets {
-    map: HashMap<IpAddr, (f64, Instant)>,
+struct Buckets<K> {
+    map: HashMap<K, (f64, Instant)>,
     last_prune: Instant,
 }
 
-impl RateLimiter {
+impl<K: Hash + Eq> RateLimiter<K> {
     /// `per_second == 0` disables limiting.
     pub fn new(per_second: f64, burst: u32) -> Self {
         Self {
@@ -38,7 +39,7 @@ impl RateLimiter {
     }
 
     /// Take one token for `ip`. `Err(seconds)` = retry after.
-    pub fn check(&self, ip: IpAddr) -> Result<(), u64> {
+    pub fn check(&self, ip: K) -> Result<(), u64> {
         if self.per_second <= 0.0 {
             return Ok(());
         }

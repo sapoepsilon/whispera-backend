@@ -193,10 +193,16 @@ pub struct AppState {
     pub device_auth: Arc<DeviceAuth>,
     pub pusher: Option<Arc<dyn Pusher>>,
     pub rate_limiter: Arc<ratelimit::RateLimiter>,
+    /// Per-sender-device quota on `/v1/notify`.
+    pub notify_limiter: Arc<ratelimit::RateLimiter<String>>,
     pub trust_proxy_headers: bool,
     pub max_devices_per_account: i64,
     pub max_body_bytes: usize,
 }
+
+/// Default `/v1/notify` quota per sender device: 30/min, burst 10.
+const NOTIFY_PER_SECOND: f64 = 0.5;
+const NOTIFY_BURST: u32 = 10;
 
 /// Knobs for [`AppState::new`] that are not services.
 #[derive(Debug, Clone)]
@@ -205,6 +211,9 @@ pub struct Settings {
     pub relay: RelayLimits,
     pub rate_per_second: f64,
     pub rate_burst: u32,
+    /// `/v1/notify` quota per sender device (0 disables).
+    pub notify_per_second: f64,
+    pub notify_burst: u32,
     pub trust_proxy_headers: bool,
     pub max_devices_per_account: i64,
     pub max_body_bytes: usize,
@@ -217,6 +226,8 @@ impl Default for Settings {
             relay: RelayLimits::default(),
             rate_per_second: 0.0,
             rate_burst: 1,
+            notify_per_second: NOTIFY_PER_SECOND,
+            notify_burst: NOTIFY_BURST,
             trust_proxy_headers: false,
             max_devices_per_account: 50,
             max_body_bytes: 256 * 1024,
@@ -231,6 +242,8 @@ impl Settings {
             relay: c.relay.limits(),
             rate_per_second: c.rate_limit.per_second,
             rate_burst: c.rate_limit.burst,
+            notify_per_second: NOTIFY_PER_SECOND,
+            notify_burst: NOTIFY_BURST,
             trust_proxy_headers: c.trust_proxy_headers,
             max_devices_per_account: c.max_devices_per_account,
             max_body_bytes: c.max_body_bytes,
@@ -252,6 +265,10 @@ impl AppState {
             auth,
             pusher,
             rate_limiter: Arc::new(ratelimit::RateLimiter::new(s.rate_per_second, s.rate_burst)),
+            notify_limiter: Arc::new(ratelimit::RateLimiter::new(
+                s.notify_per_second,
+                s.notify_burst,
+            )),
             trust_proxy_headers: s.trust_proxy_headers,
             max_devices_per_account: s.max_devices_per_account,
             max_body_bytes: s.max_body_bytes,
@@ -699,6 +716,23 @@ async fn notify(
     let dev = signed(&state, &method, &uri, &headers, &body).await?;
     let req: NotifyRequest = json_body(&body)?;
     let kind = push_kind(&req).map_err(ApiError::bad)?;
+    if let Err(retry) = state.notify_limiter.check(dev.id.clone()) {
+        tracing::warn!(device = %dev.id, retry, "notify quota exceeded");
+        return Err(ApiError::new(
+            ErrorCode::RateLimited,
+            "notify quota exceeded for this device",
+        ));
+    }
+    // Only a Mac may raise or resolve approval alerts; a phone (or any other
+    // same-account device) must not be able to spoof them.
+    if matches!(kind, PushKind::Approval { .. } | PushKind::Resolved { .. })
+        && dev.platform != "macos"
+    {
+        return Err(ApiError::new(
+            ErrorCode::Forbidden,
+            "only a macos device may send approval pushes",
+        ));
+    }
     let target = match state.store.get_device(&req.device_id).await? {
         Some(d) if d.account_id == dev.account_id && !d.is_revoked() => d,
         _ => return Err(ApiError::code(ErrorCode::NotFound)),

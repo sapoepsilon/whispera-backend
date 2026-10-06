@@ -511,6 +511,75 @@ async fn notify_approval_kinds() {
     assert_eq!(app.pusher.kinds.lock().unwrap().len(), 4, "no push on 400");
 }
 
+/// M8: a same-account non-macOS device cannot send approval pushes; a Mac can.
+#[tokio::test]
+async fn notify_approval_only_from_macos() {
+    let app = app().await;
+    let mac = register(&app, TOKEN, "Mac", json!({})).await;
+    let phone = register(
+        &app,
+        TOKEN,
+        "iPhone",
+        json!({"platform": "ios", "apns": {"token": APNS_B, "env": "sandbox"}}),
+    )
+    .await;
+    let attacker = register(&app, TOKEN, "Attacker", json!({"platform": "ios"})).await;
+    let sealed = "q83vASNFZ4kAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    for body in [
+        json!({"device_id": phone.id, "kind": "approval", "request_id": "apr_attacker01",
+               "sealed": sealed}),
+        json!({"device_id": phone.id, "kind": "approval.resolved",
+               "request_id": "apr_attacker01"}),
+    ] {
+        let (s, v) = call(&app, attacker.req("POST", "/v1/notify", Some(body))).await;
+        assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
+        assert_eq!(v["error"]["code"], "forbidden");
+    }
+    assert!(app.pusher.calls.lock().unwrap().is_empty());
+    assert!(app.pusher.kinds.lock().unwrap().is_empty());
+    // The Mac may.
+    let (s, v) = call(
+        &app,
+        mac.req(
+            "POST",
+            "/v1/notify",
+            Some(json!({"device_id": phone.id, "kind": "approval",
+                        "request_id": "apr_0a1b2c3d4e5f", "sealed": sealed})),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["push"], "sent");
+    assert_eq!(app.pusher.kinds.lock().unwrap().len(), 1);
+}
+
+/// M8: `/v1/notify` has a per-sender-device quota (burst 10), answering 429.
+#[tokio::test]
+async fn notify_per_device_quota() {
+    let app = app().await;
+    let mac = register(&app, TOKEN, "Mac", json!({})).await;
+    let mac2 = register(&app, TOKEN, "Mac2", json!({})).await;
+    let phone = register(
+        &app,
+        TOKEN,
+        "iPhone",
+        json!({"platform": "ios", "apns": {"token": APNS_B, "env": "sandbox"}}),
+    )
+    .await;
+    let body = || Some(json!({"device_id": phone.id}));
+    for i in 0..10 {
+        let (s, v) = call(&app, mac.req("POST", "/v1/notify", body())).await;
+        assert_eq!(s, StatusCode::OK, "#{i}: {v}");
+    }
+    let (s, v) = call(&app, mac.req("POST", "/v1/notify", body())).await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS, "{v}");
+    assert_eq!(v["error"]["code"], "rate_limited");
+    assert_eq!(app.pusher.calls.lock().unwrap().len(), 10);
+    // Quota is per sender device: another device is unaffected.
+    let (s, _) = call(&app, mac2.req("POST", "/v1/notify", body())).await;
+    assert_eq!(s, StatusCode::OK);
+}
+
 fn ids(v: &Value) -> Vec<String> {
     let mut ids: Vec<String> = v["devices"]
         .as_array()

@@ -159,9 +159,92 @@ pub struct RelayAckResponse {
     pub deleted: u64,
 }
 
+/// What a `/v1/notify` push is about. Absent = the legacy generic alert.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum NotifyKind {
+    /// An approval request is waiting (visible alert).
+    #[serde(rename = "approval")]
+    Approval,
+    /// An approval was decided/expired elsewhere (silent background push that
+    /// clears the banner).
+    #[serde(rename = "approval.resolved")]
+    ApprovalResolved,
+}
+
+impl NotifyKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NotifyKind::Approval => "approval",
+            NotifyKind::ApprovalResolved => "approval.resolved",
+        }
+    }
+}
+
+/// Longest accepted `sealed` blob (characters of standard base64).
+pub const MAX_SEALED_CHARS: usize = 2048;
+
+/// `^apr_[a-z0-9]{8,64}$`.
+pub fn is_valid_request_id(s: &str) -> bool {
+    s.strip_prefix("apr_").is_some_and(|rest| {
+        (8..=64).contains(&rest.len())
+            && rest
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+    })
+}
+
+/// Non-empty, at most [`MAX_SEALED_CHARS`] characters, canonical standard
+/// base64 (with padding) that decodes.
+pub fn is_valid_sealed(s: &str) -> bool {
+    use base64::Engine as _;
+    !s.is_empty()
+        && s.len() <= MAX_SEALED_CHARS
+        && base64::engine::general_purpose::STANDARD.decode(s).is_ok()
+}
+
+/// `POST /v1/notify` body. No free text: `request_id` is a constrained id and
+/// `sealed` an opaque end-to-end encrypted blob the server only forwards.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NotifyRequest {
     pub device_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<NotifyKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sealed: Option<String>,
+}
+
+impl NotifyRequest {
+    /// Checks the field combination and formats. The message is safe to
+    /// return to the client (it never echoes field values).
+    pub fn validate(&self) -> Result<(), &'static str> {
+        match self.kind {
+            None => {
+                if self.request_id.is_some() || self.sealed.is_some() {
+                    return Err("request_id and sealed require kind");
+                }
+            }
+            Some(kind) => {
+                let Some(id) = self.request_id.as_deref() else {
+                    return Err("request_id is required with kind");
+                };
+                if !is_valid_request_id(id) {
+                    return Err("request_id must match ^apr_[a-z0-9]{8,64}$");
+                }
+                if let Some(sealed) = self.sealed.as_deref() {
+                    if kind != NotifyKind::Approval {
+                        return Err("sealed is only allowed with kind \"approval\"");
+                    }
+                    if !is_valid_sealed(sealed) {
+                        return Err("sealed must be standard base64, at most 2048 characters");
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Values of [`NotifyResponse::push`].
@@ -193,6 +276,58 @@ pub struct Health {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn notify_request_validation() {
+        let ok = |v: serde_json::Value| -> Result<(), String> {
+            let r: NotifyRequest = serde_json::from_value(v).map_err(|e| e.to_string())?;
+            r.validate().map_err(String::from)
+        };
+        let id = "apr_0123abcd";
+        assert!(ok(json!({"device_id": "dev_x"})).is_ok());
+        assert!(ok(json!({"device_id": "dev_x", "kind": "approval", "request_id": id})).is_ok());
+        assert!(ok(
+            json!({"device_id": "dev_x", "kind": "approval", "request_id": id,
+                          "sealed": "AAECAw=="})
+        )
+        .is_ok());
+        assert!(ok(json!({"device_id": "dev_x", "kind": "approval.resolved",
+                          "request_id": format!("apr_{}", "a".repeat(64))}))
+        .is_ok());
+        for bad in [
+            json!({"device_id": "dev_x", "title": "hi"}),
+            json!({"device_id": "dev_x", "kind": "other", "request_id": id}),
+            json!({"device_id": "dev_x", "request_id": id}),
+            json!({"device_id": "dev_x", "sealed": "AAAA"}),
+            json!({"device_id": "dev_x", "kind": "approval"}),
+            json!({"device_id": "dev_x", "kind": "approval", "request_id": "apr_short"}),
+            json!({"device_id": "dev_x", "kind": "approval", "request_id": "apr_ABCDEFGH"}),
+            json!({"device_id": "dev_x", "kind": "approval", "request_id": "req_01234567"}),
+            json!({"device_id": "dev_x", "kind": "approval",
+                   "request_id": format!("apr_{}", "a".repeat(65))}),
+            json!({"device_id": "dev_x", "kind": "approval.resolved", "request_id": id,
+                   "sealed": "AAAA"}),
+            json!({"device_id": "dev_x", "kind": "approval", "request_id": id, "sealed": ""}),
+            json!({"device_id": "dev_x", "kind": "approval", "request_id": id, "sealed": "A-_B"}),
+            json!({"device_id": "dev_x", "kind": "approval", "request_id": id, "sealed": "AAA"}),
+            json!({"device_id": "dev_x", "kind": "approval", "request_id": id,
+                   "sealed": "A".repeat(2052)}),
+        ] {
+            assert!(ok(bad.clone()).is_err(), "{bad}");
+        }
+        assert!(is_valid_sealed(&"A".repeat(2048)));
+        // Legacy shape serializes without the optional fields.
+        let r = NotifyRequest {
+            device_id: "dev_x".into(),
+            kind: None,
+            request_id: None,
+            sealed: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&r).unwrap(),
+            json!({"device_id": "dev_x"})
+        );
+    }
 
     #[test]
     fn register_roundtrip() {

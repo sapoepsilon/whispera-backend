@@ -2468,6 +2468,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "whispera-apns-mock"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "p256",
+ "rand 0.8.8",
+ "reqwest",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "whispera-auth"
 version = "0.1.0"
 dependencies = [
@@ -2564,6 +2577,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "whispera-apns",
+ "whispera-apns-mock",
  "whispera-auth",
  "whispera-dev-idp",
  "whispera-proto",

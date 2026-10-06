@@ -1,5 +1,5 @@
 //! Whispera server: account-authenticated device registry, WL1-signed E2E
-//! relay, and content-free APNs "notify device" pushes.
+//! relay, and APNs "notify device" pushes built only from typed push kinds.
 //!
 //! Routes (all JSON, errors use the PROTOCOL §13 envelope):
 //!
@@ -36,14 +36,14 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use serde::Deserialize;
 use tower_http::trace::TraceLayer;
-use whispera_apns::{ApnsClient, PushOutcome};
+use whispera_apns::{ApnsClient, PushKind, PushOutcome, RequestId, SealedBlob};
 use whispera_auth::{bearer_from_header, AccountAuth, AuthError};
 use whispera_proto::keys::PublicKey;
 use whispera_proto::sign::{self, SignedHeaders};
 use whispera_proto::wire::{
-    apns_token_suffix, push_status, ApnsEnv, DeviceList, Health, NotifyRequest, NotifyResponse,
-    PublicDevice, RegisterDeviceRequest, RelayAckRequest, RelayAckResponse, RelayFetchResponse,
-    RelaySendRequest, UpdateApnsRequest,
+    apns_token_suffix, push_status, ApnsEnv, DeviceList, Health, NotifyKind, NotifyRequest,
+    NotifyResponse, PublicDevice, RegisterDeviceRequest, RelayAckRequest, RelayAckResponse,
+    RelayFetchResponse, RelaySendRequest, UpdateApnsRequest,
 };
 use whispera_proto::{ErrorCode, ErrorEnvelope};
 use whispera_relay::{DeviceAuth, Relay, RelayError, RelayLimits};
@@ -144,17 +144,43 @@ type ApiResult<T> = Result<T, ApiError>;
 
 // ---------------------------------------------------------------- push
 
-/// Sends a content-free push to one device token.
+/// Sends a push to one device token. The payload is derived from the typed
+/// [`PushKind`] only, never from free request text.
 #[async_trait::async_trait]
 pub trait Pusher: Send + Sync + 'static {
-    async fn push(&self, token: &str, env: ApnsEnv) -> PushOutcome;
+    async fn push(&self, token: &str, env: ApnsEnv, kind: &PushKind) -> PushOutcome;
 }
 
 #[async_trait::async_trait]
 impl Pusher for ApnsClient {
-    async fn push(&self, token: &str, env: ApnsEnv) -> PushOutcome {
-        self.notify(token, env).await
+    async fn push(&self, token: &str, env: ApnsEnv, kind: &PushKind) -> PushOutcome {
+        self.send(token, env, kind).await
     }
+}
+
+/// Validates a `/v1/notify` body and maps it to the typed push kind.
+pub fn push_kind(req: &NotifyRequest) -> Result<PushKind, &'static str> {
+    req.validate()?;
+    const BAD: &str = "invalid notify request";
+    let request_id = || {
+        req.request_id
+            .as_deref()
+            .and_then(RequestId::parse)
+            .ok_or(BAD)
+    };
+    Ok(match req.kind {
+        None => PushKind::Legacy,
+        Some(NotifyKind::Approval) => PushKind::Approval {
+            request_id: request_id()?,
+            sealed: match req.sealed.as_deref() {
+                Some(s) => Some(SealedBlob::parse(s).ok_or(BAD)?),
+                None => None,
+            },
+        },
+        Some(NotifyKind::ApprovalResolved) => PushKind::Resolved {
+            request_id: request_id()?,
+        },
+    })
 }
 
 // ---------------------------------------------------------------- state
@@ -167,10 +193,16 @@ pub struct AppState {
     pub device_auth: Arc<DeviceAuth>,
     pub pusher: Option<Arc<dyn Pusher>>,
     pub rate_limiter: Arc<ratelimit::RateLimiter>,
+    /// Per-sender-device quota on `/v1/notify`.
+    pub notify_limiter: Arc<ratelimit::RateLimiter<String>>,
     pub trust_proxy_headers: bool,
     pub max_devices_per_account: i64,
     pub max_body_bytes: usize,
 }
+
+/// Default `/v1/notify` quota per sender device: 30/min, burst 10.
+const NOTIFY_PER_SECOND: f64 = 0.5;
+const NOTIFY_BURST: u32 = 10;
 
 /// Knobs for [`AppState::new`] that are not services.
 #[derive(Debug, Clone)]
@@ -179,6 +211,9 @@ pub struct Settings {
     pub relay: RelayLimits,
     pub rate_per_second: f64,
     pub rate_burst: u32,
+    /// `/v1/notify` quota per sender device (0 disables).
+    pub notify_per_second: f64,
+    pub notify_burst: u32,
     pub trust_proxy_headers: bool,
     pub max_devices_per_account: i64,
     pub max_body_bytes: usize,
@@ -191,6 +226,8 @@ impl Default for Settings {
             relay: RelayLimits::default(),
             rate_per_second: 0.0,
             rate_burst: 1,
+            notify_per_second: NOTIFY_PER_SECOND,
+            notify_burst: NOTIFY_BURST,
             trust_proxy_headers: false,
             max_devices_per_account: 50,
             max_body_bytes: 256 * 1024,
@@ -205,6 +242,8 @@ impl Settings {
             relay: c.relay.limits(),
             rate_per_second: c.rate_limit.per_second,
             rate_burst: c.rate_limit.burst,
+            notify_per_second: NOTIFY_PER_SECOND,
+            notify_burst: NOTIFY_BURST,
             trust_proxy_headers: c.trust_proxy_headers,
             max_devices_per_account: c.max_devices_per_account,
             max_body_bytes: c.max_body_bytes,
@@ -226,6 +265,10 @@ impl AppState {
             auth,
             pusher,
             rate_limiter: Arc::new(ratelimit::RateLimiter::new(s.rate_per_second, s.rate_burst)),
+            notify_limiter: Arc::new(ratelimit::RateLimiter::new(
+                s.notify_per_second,
+                s.notify_burst,
+            )),
             trust_proxy_headers: s.trust_proxy_headers,
             max_devices_per_account: s.max_devices_per_account,
             max_body_bytes: s.max_body_bytes,
@@ -672,6 +715,24 @@ async fn notify(
 ) -> ApiResult<Json<NotifyResponse>> {
     let dev = signed(&state, &method, &uri, &headers, &body).await?;
     let req: NotifyRequest = json_body(&body)?;
+    let kind = push_kind(&req).map_err(ApiError::bad)?;
+    if let Err(retry) = state.notify_limiter.check(dev.id.clone()) {
+        tracing::warn!(device = %dev.id, retry, "notify quota exceeded");
+        return Err(ApiError::new(
+            ErrorCode::RateLimited,
+            "notify quota exceeded for this device",
+        ));
+    }
+    // Only a Mac may raise or resolve approval alerts; a phone (or any other
+    // same-account device) must not be able to spoof them.
+    if matches!(kind, PushKind::Approval { .. } | PushKind::Resolved { .. })
+        && dev.platform != "macos"
+    {
+        return Err(ApiError::new(
+            ErrorCode::Forbidden,
+            "only a macos device may send approval pushes",
+        ));
+    }
     let target = match state.store.get_device(&req.device_id).await? {
         Some(d) if d.account_id == dev.account_id && !d.is_revoked() => d,
         _ => return Err(ApiError::code(ErrorCode::NotFound)),
@@ -686,8 +747,11 @@ async fn notify(
     ) else {
         return reply(push_status::NO_TOKEN);
     };
-    match pusher.push(token, env).await {
-        PushOutcome::Sent => reply(push_status::SENT),
+    match pusher.push(token, env, &kind).await {
+        PushOutcome::Sent => {
+            tracing::info!(device = %target.id, kind = kind.label(), "push sent");
+            reply(push_status::SENT)
+        }
         PushOutcome::Unregistered => {
             tracing::info!(device = %target.id, "APNs token unregistered; clearing it");
             state.store.clear_apns_token(&target.id, token).await?;

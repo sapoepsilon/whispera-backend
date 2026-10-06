@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use tracing_subscriber::EnvFilter;
-use whispera_apns::{ApnsClient, ApnsConfig};
+use whispera_apns::{ApnsClient, ApnsConfig, PRODUCTION_URL, SANDBOX_URL};
 use whispera_server::{router, spawn_maintenance, AppState, Config, Pusher, Settings};
 use whispera_store::Store;
 
@@ -66,6 +66,34 @@ fn apns_config(cfg: &Config) -> Result<Option<ApnsConfig>, String> {
     }
 }
 
+/// Apple's endpoints, or the `[apns] sandbox_url` / `production_url`
+/// (`APNS_SANDBOX_URL` / `APNS_PRODUCTION_URL`) overrides, e.g. for
+/// `whispera-apns-mock`. Logs which endpoints are in use, never key material.
+fn apns_client(cfg: &Config, c: ApnsConfig) -> Result<ApnsClient, String> {
+    let ep = &cfg.apns_endpoints;
+    let client = if ep.is_custom() {
+        let sandbox = ep.sandbox_url.as_deref().unwrap_or(SANDBOX_URL);
+        let production = ep.production_url.as_deref().unwrap_or(PRODUCTION_URL);
+        ApnsClient::with_base_urls(c, production, sandbox)
+    } else {
+        ApnsClient::new(c)
+    }
+    .map_err(|e| format!("APNs: {e}"))?;
+    let describe = |o: &Option<String>| match o {
+        Some(u) => format!("custom URL {u}"),
+        None => "Apple".to_string(),
+    };
+    tracing::info!(
+        sandbox = %describe(&ep.sandbox_url),
+        production = %describe(&ep.production_url),
+        "APNs endpoints"
+    );
+    if ep.is_custom() {
+        tracing::warn!("APNs custom endpoint in use: pushes for that environment go to the custom URL, not Apple");
+    }
+    Ok(client)
+}
+
 async fn run() -> Result<(), String> {
     let cfg = Config::from_env().map_err(|e| format!("config: {e}"))?;
     let auth = whispera_auth::build_from_config(cfg.auth.as_ref().expect("validated"))
@@ -75,11 +103,12 @@ async fn run() -> Result<(), String> {
         .await
         .map_err(|e| format!("database: {e}"))?;
     let pusher: Option<Arc<dyn Pusher>> = match apns_config(&cfg)? {
-        Some(c) => Some(Arc::new(
-            ApnsClient::new(c).map_err(|e| format!("APNs: {e}"))?,
-        )),
+        Some(c) => Some(Arc::new(apns_client(&cfg, c)?)),
         None => {
             tracing::info!("APNs not configured; push disabled");
+            if cfg.apns_endpoints.is_custom() {
+                tracing::warn!("APNs endpoint override set but no APNs key configured; ignored");
+            }
             None
         }
     };

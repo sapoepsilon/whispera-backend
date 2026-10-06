@@ -5,8 +5,10 @@
 //!   expired or invalid.
 //! * HTTP/2 to `api.push.apple.com` / `api.sandbox.push.apple.com`, chosen per
 //!   request from [`ApnsEnv`].
-//! * The payload is a fixed constant ([`PAYLOAD`]); there is deliberately no API
-//!   that accepts custom text, so nothing from a request can leak into a push.
+//! * Payloads are built only from the typed [`PushKind`] (fixed strings plus a
+//!   validated [`RequestId`] and an opaque end-to-end sealed [`SealedBlob`]);
+//!   there is deliberately no API that accepts custom text, so nothing readable
+//!   from a request can leak into a push.
 //! * Key material is never logged or `Debug`-printed, and device tokens are only
 //!   ever logged by their last 8 characters.
 
@@ -23,13 +25,14 @@ use p256::pkcs8::DecodePrivateKey as _;
 use tokio::sync::Mutex;
 
 pub use whispera_proto::wire::ApnsEnv;
+use whispera_proto::wire::{is_valid_request_id, is_valid_sealed};
 
 /// Production APNs endpoint.
 pub const PRODUCTION_URL: &str = "https://api.push.apple.com";
 /// Sandbox (development) APNs endpoint.
 pub const SANDBOX_URL: &str = "https://api.sandbox.push.apple.com";
 
-/// The only payload this crate ever sends. Generic by design: no request
+/// The legacy payload ([`PushKind::Legacy`]). Generic by design: no request
 /// content, sender, or metadata is ever included.
 pub const PAYLOAD: &str =
     r#"{"aps":{"alert":{"title":"Whispera","body":"You have a new request"},"sound":"default"}}"#;
@@ -38,8 +41,141 @@ pub const PAYLOAD: &str =
 /// older than 60 minutes and throttles refreshes more often than every 20).
 pub const TOKEN_MAX_AGE_SECS: i64 = 50 * 60;
 
-/// `apns-expiration` is set to now + this many seconds.
+/// `apns-expiration` is set to now + this many seconds (legacy pushes).
 pub const EXPIRATION_SECS: i64 = 3600;
+
+/// `apns-expiration` for approval pushes: the 5-minute approval window.
+pub const APPROVAL_EXPIRATION_SECS: i64 = 300;
+
+/// Notification category the iOS app registers for approval actions.
+pub const APPROVAL_CATEGORY: &str = "WL_APPROVAL";
+/// `thread-id` grouping approval alerts.
+pub const APPROVAL_THREAD_ID: &str = "wl-approvals";
+
+/// An approval request id, validated against `^apr_[a-z0-9]{8,64}$`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestId(String);
+
+impl RequestId {
+    pub fn parse(s: &str) -> Option<Self> {
+        is_valid_request_id(s).then(|| RequestId(s.to_owned()))
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// An opaque, end-to-end sealed (WLP1) notification text: standard base64,
+/// at most 2048 characters. The server cannot read it; only the phone's
+/// Notification Service Extension can.
+#[derive(Clone, PartialEq, Eq)]
+pub struct SealedBlob(String);
+
+impl SealedBlob {
+    pub fn parse(s: &str) -> Option<Self> {
+        is_valid_sealed(s).then(|| SealedBlob(s.to_owned()))
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for SealedBlob {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "SealedBlob({} chars)", self.0.len())
+    }
+}
+
+/// What to push. Every payload is derived from this enum alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PushKind {
+    /// The fixed generic alert ([`PAYLOAD`]).
+    Legacy,
+    /// An approval is waiting. With `sealed` the alert is "named": the phone's
+    /// extension replaces the generic text with the decrypted one.
+    Approval {
+        request_id: RequestId,
+        sealed: Option<SealedBlob>,
+    },
+    /// The approval was resolved elsewhere: silent background push.
+    Resolved { request_id: RequestId },
+}
+
+impl PushKind {
+    /// Short name for logs: `legacy`, `approval`, `approval.named`, `approval.resolved`.
+    pub fn label(&self) -> &'static str {
+        match self {
+            PushKind::Legacy => "legacy",
+            PushKind::Approval { sealed: None, .. } => "approval",
+            PushKind::Approval {
+                sealed: Some(_), ..
+            } => "approval.named",
+            PushKind::Resolved { .. } => "approval.resolved",
+        }
+    }
+
+    /// The JSON body sent to APNs.
+    pub fn payload(&self) -> String {
+        use serde_json::json;
+        match self {
+            PushKind::Legacy => PAYLOAD.to_owned(),
+            PushKind::Approval { request_id, sealed } => {
+                let mut v = json!({
+                    "aps": {
+                        "alert": {"title": "Whispera", "body": "Approval requested"},
+                        "sound": "default",
+                        "category": APPROVAL_CATEGORY,
+                        "thread-id": APPROVAL_THREAD_ID,
+                    },
+                    "wl": {"kind": "approval", "request_id": request_id.as_str()},
+                });
+                if let Some(sealed) = sealed {
+                    v["aps"]["mutable-content"] = json!(1);
+                    v["wl"]["sealed"] = json!(sealed.as_str());
+                }
+                v.to_string()
+            }
+            PushKind::Resolved { request_id } => json!({
+                "aps": {"content-available": 1},
+                "wl": {"kind": "approval.resolved", "request_id": request_id.as_str()},
+            })
+            .to_string(),
+        }
+    }
+
+    /// `apns-push-type`.
+    pub fn push_type(&self) -> &'static str {
+        match self {
+            PushKind::Resolved { .. } => "background",
+            _ => "alert",
+        }
+    }
+
+    /// `apns-priority` (background pushes must use 5).
+    pub fn priority(&self) -> &'static str {
+        match self {
+            PushKind::Resolved { .. } => "5",
+            _ => "10",
+        }
+    }
+
+    /// `apns-collapse-id`: the request id for approval alerts, so a re-push of
+    /// the same request replaces the banner instead of stacking.
+    pub fn collapse_id(&self) -> Option<&str> {
+        match self {
+            PushKind::Approval { request_id, .. } => Some(request_id.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Seconds from now until `apns-expiration`.
+    pub fn expiration_secs(&self) -> i64 {
+        match self {
+            PushKind::Legacy => EXPIRATION_SECS,
+            _ => APPROVAL_EXPIRATION_SECS,
+        }
+    }
+}
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -387,8 +523,13 @@ impl ApnsClient {
         }
     }
 
-    /// Sends the fixed generic notification to `device_token`.
+    /// Sends the fixed generic notification ([`PushKind::Legacy`]) to `device_token`.
     pub async fn notify(&self, device_token: &str, env: ApnsEnv) -> PushOutcome {
+        self.send(device_token, env, &PushKind::Legacy).await
+    }
+
+    /// Sends the notification described by `kind` to `device_token`.
+    pub async fn send(&self, device_token: &str, env: ApnsEnv, kind: &PushKind) -> PushOutcome {
         let suffix = token_suffix(device_token);
         if !valid_device_token(device_token) {
             tracing::warn!(token_suffix = %suffix, "apns: invalid device token, not sending");
@@ -401,20 +542,21 @@ impl ApnsClient {
         };
         let url = format!("{base}/3/device/{device_token}");
         let jwt = self.provider_token().await;
-        let expiration = self.clock.now_unix() + EXPIRATION_SECS;
+        let expiration = self.clock.now_unix() + kind.expiration_secs();
 
-        let resp = self
+        let mut req = self
             .http
             .post(url)
             .header("authorization", format!("bearer {jwt}"))
             .header("apns-topic", &self.topic)
-            .header("apns-push-type", "alert")
-            .header("apns-priority", "10")
+            .header("apns-push-type", kind.push_type())
+            .header("apns-priority", kind.priority())
             .header("apns-expiration", expiration.to_string())
-            .header("content-type", "application/json")
-            .body(PAYLOAD)
-            .send()
-            .await;
+            .header("content-type", "application/json");
+        if let Some(collapse) = kind.collapse_id() {
+            req = req.header("apns-collapse-id", collapse);
+        }
+        let resp = req.body(kind.payload()).send().await;
 
         let resp = match resp {
             Ok(r) => r,
@@ -428,7 +570,7 @@ impl ApnsClient {
 
         let status = resp.status().as_u16();
         if status == 200 {
-            tracing::debug!(token_suffix = %suffix, env = env.as_str(), "apns: sent");
+            tracing::debug!(token_suffix = %suffix, env = env.as_str(), kind = kind.label(), "apns: sent");
             return PushOutcome::Sent;
         }
 
@@ -473,6 +615,19 @@ mod unit {
         assert!(!valid_device_token(&"g".repeat(64)));
         assert_eq!(token_suffix("0123456789abcdef"), "89abcdef");
         assert_eq!(token_suffix("abc"), "abc");
+    }
+
+    #[test]
+    fn typed_values_are_validated() {
+        assert!(RequestId::parse("apr_0123abcd").is_some());
+        assert!(RequestId::parse("apr_\"}x\"").is_none());
+        assert!(RequestId::parse("hello world").is_none());
+        assert!(SealedBlob::parse("AAECAw==").is_some());
+        assert!(SealedBlob::parse("not base64!").is_none());
+        assert_eq!(
+            format!("{:?}", SealedBlob::parse("AAECAw==").unwrap()),
+            "SealedBlob(8 chars)"
+        );
     }
 
     #[test]

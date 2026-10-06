@@ -6,6 +6,7 @@ members = [
     "crates/store",
     "crates/relay",
     "crates/apns",
+    "crates/apns-mock",
     "crates/stt",
     "crates/server",
     "crates/dev-idp",
@@ -25,6 +26,7 @@ whispera-auth = { path = "crates/auth" }
 whispera-store = { path = "crates/store", default-features = false }
 whispera-relay = { path = "crates/relay" }
 whispera-apns = { path = "crates/apns" }
+whispera-apns-mock = { path = "crates/apns-mock" }
 whispera-stt = { path = "crates/stt" }
 whispera-dev-idp = { path = "crates/dev-idp" }
 

@@ -14,7 +14,8 @@ use p256::ecdsa::signature::Verifier as _;
 use p256::ecdsa::{Signature, VerifyingKey};
 use p256::pkcs8::{EncodePrivateKey as _, LineEnding};
 use whispera_apns::{
-    ApnsClient, ApnsConfig, ApnsEnv, ApnsError, Clock, PushOutcome, SecretKey, PAYLOAD,
+    ApnsClient, ApnsConfig, ApnsEnv, ApnsError, Clock, PushKind, PushOutcome, RequestId,
+    SealedBlob, SecretKey, PAYLOAD,
 };
 
 const KEY_ID: &str = "ABC123DEFG";
@@ -193,6 +194,131 @@ async fn sends_correct_request() {
     assert_eq!(header["kid"], KEY_ID);
     assert_eq!(claims["iss"], TEAM_ID);
     assert_eq!(claims["iat"], T0);
+}
+
+const REQ_ID: &str = "apr_0a1b2c3d4e5f";
+const SEALED: &str = "q83vASNFZ4kAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+
+fn apns_headers(r: &Captured) -> serde_json::Value {
+    let mut m = serde_json::Map::new();
+    for (k, v) in &r.headers {
+        if k.as_str().starts_with("apns-") {
+            m.insert(k.as_str().into(), v.to_str().unwrap().into());
+        }
+    }
+    serde_json::Value::Object(m)
+}
+
+/// Sends `kind` and returns (payload JSON, apns-* headers).
+async fn send_kind(kind: PushKind) -> (serde_json::Value, serde_json::Value) {
+    let f = fixture().await;
+    assert_eq!(
+        f.client
+            .send(&device_token(), ApnsEnv::Sandbox, &kind)
+            .await,
+        PushOutcome::Sent
+    );
+    let reqs = f.mock.requests();
+    assert_eq!(reqs.len(), 1);
+    assert_eq!(reqs[0].headers["content-type"], "application/json");
+    verify_jwt(&bearer(&reqs[0]), &f.verifying_key);
+    (
+        serde_json::from_slice(&reqs[0].body).unwrap(),
+        apns_headers(&reqs[0]),
+    )
+}
+
+fn req_id() -> RequestId {
+    RequestId::parse(REQ_ID).unwrap()
+}
+
+#[tokio::test]
+async fn legacy_kind_matches_notify() {
+    let (payload, headers) = send_kind(PushKind::Legacy).await;
+    assert_eq!(
+        payload,
+        serde_json::from_str::<serde_json::Value>(PAYLOAD).unwrap()
+    );
+    assert_eq!(
+        headers,
+        serde_json::json!({
+            "apns-topic": TOPIC, "apns-push-type": "alert", "apns-priority": "10",
+            "apns-expiration": (T0 + 3600).to_string(),
+        })
+    );
+}
+
+#[tokio::test]
+async fn approval_generic_payload_and_headers() {
+    let (payload, headers) = send_kind(PushKind::Approval {
+        request_id: req_id(),
+        sealed: None,
+    })
+    .await;
+    assert_eq!(
+        payload,
+        serde_json::json!({
+            "aps": {"alert": {"title": "Whispera", "body": "Approval requested"},
+                    "sound": "default", "category": "WL_APPROVAL", "thread-id": "wl-approvals"},
+            "wl": {"kind": "approval", "request_id": REQ_ID},
+        })
+    );
+    assert!(payload["aps"].get("mutable-content").is_none());
+    assert!(payload["wl"].get("sealed").is_none());
+    assert_eq!(
+        headers,
+        serde_json::json!({
+            "apns-topic": TOPIC, "apns-push-type": "alert", "apns-priority": "10",
+            "apns-collapse-id": REQ_ID, "apns-expiration": (T0 + 300).to_string(),
+        })
+    );
+}
+
+#[tokio::test]
+async fn approval_named_payload_and_headers() {
+    let (payload, headers) = send_kind(PushKind::Approval {
+        request_id: req_id(),
+        sealed: Some(SealedBlob::parse(SEALED).unwrap()),
+    })
+    .await;
+    assert_eq!(
+        payload,
+        serde_json::json!({
+            "aps": {"alert": {"title": "Whispera", "body": "Approval requested"},
+                    "sound": "default", "category": "WL_APPROVAL", "thread-id": "wl-approvals",
+                    "mutable-content": 1},
+            "wl": {"kind": "approval", "request_id": REQ_ID, "sealed": SEALED},
+        })
+    );
+    assert_eq!(
+        headers,
+        serde_json::json!({
+            "apns-topic": TOPIC, "apns-push-type": "alert", "apns-priority": "10",
+            "apns-collapse-id": REQ_ID, "apns-expiration": (T0 + 300).to_string(),
+        })
+    );
+}
+
+#[tokio::test]
+async fn resolved_is_silent_background() {
+    let (payload, headers) = send_kind(PushKind::Resolved {
+        request_id: req_id(),
+    })
+    .await;
+    assert_eq!(
+        payload,
+        serde_json::json!({
+            "aps": {"content-available": 1},
+            "wl": {"kind": "approval.resolved", "request_id": REQ_ID},
+        })
+    );
+    assert_eq!(
+        headers,
+        serde_json::json!({
+            "apns-topic": TOPIC, "apns-push-type": "background", "apns-priority": "5",
+            "apns-expiration": (T0 + 300).to_string(),
+        })
+    );
 }
 
 #[tokio::test]

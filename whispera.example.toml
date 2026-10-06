@@ -45,3 +45,8 @@ max_wait_s = 30
 # key_id = "ABC123DEFG"
 # team_id = "TEAM123456"
 # topic = "com.example.whispera"
+# Mock switch (dev/e2e): send pushes to whispera-apns-mock instead of Apple.
+# Omit both for real delivery (needs a real APNs key on a hosted backend).
+# Env: APNS_SANDBOX_URL / APNS_PRODUCTION_URL.
+# sandbox_url = "http://127.0.0.1:18082"
+# production_url = "http://127.0.0.1:18082/production"

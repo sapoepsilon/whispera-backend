@@ -32,3 +32,9 @@ coverage/
 
 # OS
 Thumbs.db
+
+# Rust
+/target/
+*.db
+*.db-shm
+*.db-wal

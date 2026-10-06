@@ -72,6 +72,10 @@ pub struct RegisterDeviceRequest {
     pub link_pubkey: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approve_pubkey: Option<String>,
+    /// Standard-base64 public key for sealing relay envelopes to this device.
+    /// Opaque to the server (the KEM is chosen by the clients).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kem_pubkey: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub apns: Option<ApnsRegistration>,
 }
@@ -90,6 +94,7 @@ pub struct PublicDevice {
     pub platform: Platform,
     pub link_pubkey: String,
     pub approve_pubkey: Option<String>,
+    pub kem_pubkey: Option<String>,
     pub link_fp: String,
     pub approve_fp: Option<String>,
     /// Last 8 chars of the APNs token only.
@@ -138,6 +143,12 @@ pub struct RelayFetchResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RelayAckRequest {
     pub up_to_seq: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelayAckResponse {
+    /// Number of messages deleted.
+    pub deleted: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

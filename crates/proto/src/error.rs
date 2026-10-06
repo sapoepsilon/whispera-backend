@@ -66,6 +66,7 @@ error_codes! {
     // backend-specific
     AuthAccountMissing => ("auth_account_missing", 401),
     AuthAccountInvalid => ("auth_account_invalid", 401),
+    AuthUnavailable => ("auth_unavailable", 503),
     Forbidden => ("forbidden", 403),
     MailboxFull => ("mailbox_full", 429),
 }
@@ -151,7 +152,7 @@ mod tests {
 
     #[test]
     fn mapping() {
-        assert_eq!(ErrorCode::ALL.len(), 31);
+        assert_eq!(ErrorCode::ALL.len(), 32);
         for &c in ErrorCode::ALL {
             assert_eq!(c.as_str().parse::<ErrorCode>(), Ok(c));
             assert_eq!(serde_json::to_value(c).unwrap(), json!(c.as_str()));

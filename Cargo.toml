@@ -21,7 +21,7 @@ rust-version = "1.85"
 [workspace.dependencies]
 whispera-proto = { path = "crates/proto" }
 whispera-auth = { path = "crates/auth" }
-whispera-store = { path = "crates/store" }
+whispera-store = { path = "crates/store", default-features = false }
 whispera-relay = { path = "crates/relay" }
 whispera-apns = { path = "crates/apns" }
 whispera-stt = { path = "crates/stt" }

@@ -1,5 +1,5 @@
 //! Whispera server: account-authenticated device registry, WL1-signed E2E
-//! relay, and content-free APNs "notify device" pushes.
+//! relay, and APNs "notify device" pushes built only from typed push kinds.
 //!
 //! Routes (all JSON, errors use the PROTOCOL §13 envelope):
 //!
@@ -36,14 +36,14 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use serde::Deserialize;
 use tower_http::trace::TraceLayer;
-use whispera_apns::{ApnsClient, PushOutcome};
+use whispera_apns::{ApnsClient, PushKind, PushOutcome, RequestId, SealedBlob};
 use whispera_auth::{bearer_from_header, AccountAuth, AuthError};
 use whispera_proto::keys::PublicKey;
 use whispera_proto::sign::{self, SignedHeaders};
 use whispera_proto::wire::{
-    apns_token_suffix, push_status, ApnsEnv, DeviceList, Health, NotifyRequest, NotifyResponse,
-    PublicDevice, RegisterDeviceRequest, RelayAckRequest, RelayAckResponse, RelayFetchResponse,
-    RelaySendRequest, UpdateApnsRequest,
+    apns_token_suffix, push_status, ApnsEnv, DeviceList, Health, NotifyKind, NotifyRequest,
+    NotifyResponse, PublicDevice, RegisterDeviceRequest, RelayAckRequest, RelayAckResponse,
+    RelayFetchResponse, RelaySendRequest, UpdateApnsRequest,
 };
 use whispera_proto::{ErrorCode, ErrorEnvelope};
 use whispera_relay::{DeviceAuth, Relay, RelayError, RelayLimits};
@@ -144,17 +144,43 @@ type ApiResult<T> = Result<T, ApiError>;
 
 // ---------------------------------------------------------------- push
 
-/// Sends a content-free push to one device token.
+/// Sends a push to one device token. The payload is derived from the typed
+/// [`PushKind`] only, never from free request text.
 #[async_trait::async_trait]
 pub trait Pusher: Send + Sync + 'static {
-    async fn push(&self, token: &str, env: ApnsEnv) -> PushOutcome;
+    async fn push(&self, token: &str, env: ApnsEnv, kind: &PushKind) -> PushOutcome;
 }
 
 #[async_trait::async_trait]
 impl Pusher for ApnsClient {
-    async fn push(&self, token: &str, env: ApnsEnv) -> PushOutcome {
-        self.notify(token, env).await
+    async fn push(&self, token: &str, env: ApnsEnv, kind: &PushKind) -> PushOutcome {
+        self.send(token, env, kind).await
     }
+}
+
+/// Validates a `/v1/notify` body and maps it to the typed push kind.
+pub fn push_kind(req: &NotifyRequest) -> Result<PushKind, &'static str> {
+    req.validate()?;
+    const BAD: &str = "invalid notify request";
+    let request_id = || {
+        req.request_id
+            .as_deref()
+            .and_then(RequestId::parse)
+            .ok_or(BAD)
+    };
+    Ok(match req.kind {
+        None => PushKind::Legacy,
+        Some(NotifyKind::Approval) => PushKind::Approval {
+            request_id: request_id()?,
+            sealed: match req.sealed.as_deref() {
+                Some(s) => Some(SealedBlob::parse(s).ok_or(BAD)?),
+                None => None,
+            },
+        },
+        Some(NotifyKind::ApprovalResolved) => PushKind::Resolved {
+            request_id: request_id()?,
+        },
+    })
 }
 
 // ---------------------------------------------------------------- state
@@ -672,6 +698,7 @@ async fn notify(
 ) -> ApiResult<Json<NotifyResponse>> {
     let dev = signed(&state, &method, &uri, &headers, &body).await?;
     let req: NotifyRequest = json_body(&body)?;
+    let kind = push_kind(&req).map_err(ApiError::bad)?;
     let target = match state.store.get_device(&req.device_id).await? {
         Some(d) if d.account_id == dev.account_id && !d.is_revoked() => d,
         _ => return Err(ApiError::code(ErrorCode::NotFound)),
@@ -686,8 +713,11 @@ async fn notify(
     ) else {
         return reply(push_status::NO_TOKEN);
     };
-    match pusher.push(token, env).await {
-        PushOutcome::Sent => reply(push_status::SENT),
+    match pusher.push(token, env, &kind).await {
+        PushOutcome::Sent => {
+            tracing::info!(device = %target.id, kind = kind.label(), "push sent");
+            reply(push_status::SENT)
+        }
         PushOutcome::Unregistered => {
             tracing::info!(device = %target.id, "APNs token unregistered; clearing it");
             state.store.clear_apns_token(&target.id, token).await?;

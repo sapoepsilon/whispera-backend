@@ -10,7 +10,7 @@ use axum::Router;
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tower::ServiceExt;
-use whispera_apns::PushOutcome;
+use whispera_apns::{PushKind, PushOutcome};
 use whispera_auth::{
     hash_token, AccountAuth, OidcAuth, OidcConfig, StaticTokenAuth, StaticTokenEntry,
 };
@@ -26,13 +26,15 @@ const APNS_B: &str = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d
 #[derive(Default)]
 struct FakePusher {
     calls: Mutex<Vec<(String, ApnsEnv)>>,
+    kinds: Mutex<Vec<PushKind>>,
     outcome: Mutex<Option<PushOutcome>>,
 }
 
 #[async_trait::async_trait]
 impl Pusher for FakePusher {
-    async fn push(&self, token: &str, env: ApnsEnv) -> PushOutcome {
+    async fn push(&self, token: &str, env: ApnsEnv, kind: &PushKind) -> PushOutcome {
         self.calls.lock().unwrap().push((token.into(), env));
+        self.kinds.lock().unwrap().push(kind.clone());
         self.outcome
             .lock()
             .unwrap()
@@ -412,6 +414,103 @@ async fn notify_is_content_free_and_cleans_dead_tokens() {
     assert_eq!(s, StatusCode::NOT_FOUND);
 }
 
+/// `/v1/notify` with `kind`: approval (generic / named) and approval.resolved
+/// reach the pusher as the matching typed kind; malformed bodies are 400.
+#[tokio::test]
+async fn notify_approval_kinds() {
+    let app = app().await;
+    let mac = register(&app, TOKEN, "Mac", json!({})).await;
+    let phone = register(
+        &app,
+        TOKEN,
+        "iPhone",
+        json!({"platform": "ios", "apns": {"token": APNS_B, "env": "sandbox"}}),
+    )
+    .await;
+    let id = "apr_0a1b2c3d4e5f";
+    let sealed = "q83vASNFZ4kAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    for body in [
+        json!({"device_id": phone.id, "kind": "approval", "request_id": id}),
+        json!({"device_id": phone.id, "kind": "approval", "request_id": id, "sealed": sealed}),
+        json!({"device_id": phone.id, "kind": "approval.resolved", "request_id": id}),
+        json!({"device_id": phone.id}),
+    ] {
+        let (s, v) = call(&app, mac.req("POST", "/v1/notify", Some(body))).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        assert_eq!(v["push"], "sent");
+    }
+    let rid = whispera_apns::RequestId::parse(id).unwrap();
+    assert_eq!(
+        app.pusher.kinds.lock().unwrap().as_slice(),
+        &[
+            PushKind::Approval {
+                request_id: rid.clone(),
+                sealed: None
+            },
+            PushKind::Approval {
+                request_id: rid.clone(),
+                sealed: Some(whispera_apns::SealedBlob::parse(sealed).unwrap()),
+            },
+            PushKind::Resolved { request_id: rid },
+            PushKind::Legacy,
+        ]
+    );
+    assert!(app
+        .pusher
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|c| c == &(APNS_B.to_string(), ApnsEnv::Sandbox)));
+
+    for (body, needle) in [
+        (
+            json!({"device_id": phone.id, "kind": "approval", "request_id": "apr_SHOUTING1"}),
+            "request_id",
+        ),
+        (
+            json!({"device_id": phone.id, "kind": "approval", "request_id": "apr_short"}),
+            "request_id",
+        ),
+        (
+            json!({"device_id": phone.id, "kind": "approval"}),
+            "request_id",
+        ),
+        (
+            json!({"device_id": phone.id, "kind": "approval.resolved", "request_id": id,
+                   "sealed": sealed}),
+            "sealed",
+        ),
+        (json!({"device_id": phone.id, "sealed": sealed}), "sealed"),
+        (
+            json!({"device_id": phone.id, "kind": "approval", "request_id": id,
+                   "sealed": "A".repeat(2052)}),
+            "sealed",
+        ),
+        (
+            json!({"device_id": phone.id, "kind": "approval", "request_id": id,
+                   "sealed": "not base64!"}),
+            "sealed",
+        ),
+        (
+            json!({"device_id": phone.id, "kind": "approval", "request_id": id,
+                   "title": "free text"}),
+            "unknown field",
+        ),
+        (
+            json!({"device_id": phone.id, "kind": "nudge", "request_id": id}),
+            "unknown variant",
+        ),
+    ] {
+        let (s, v) = call(&app, mac.req("POST", "/v1/notify", Some(body.clone()))).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{body} -> {v}");
+        assert_eq!(v["error"]["code"], "bad_request");
+        let msg = v["error"]["message"].as_str().unwrap();
+        assert!(msg.contains(needle), "{body} -> {msg}");
+    }
+    assert_eq!(app.pusher.kinds.lock().unwrap().len(), 4, "no push on 400");
+}
+
 fn ids(v: &Value) -> Vec<String> {
     let mut ids: Vec<String> = v["devices"]
         .as_array()
@@ -498,6 +597,17 @@ async fn other_account_is_isolated() {
         .await;
         assert_eq!(s, StatusCode::NOT_FOUND);
     }
+    // Not even with a well-formed approval kind.
+    let (s, _) = call(
+        &app,
+        x.req(
+            "POST",
+            "/v1/notify",
+            Some(json!({"device_id": a2.id, "kind": "approval", "request_id": "apr_0123abcd"})),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
     assert!(app.pusher.calls.lock().unwrap().is_empty(), "no push to A");
     assert!(app
         .store

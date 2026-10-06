@@ -27,6 +27,7 @@ The previous TypeScript backend is archived under [`legacy/`](legacy/) for refer
 | `crates/apns` | APNs token auth (ES256), HTTP/2 client, content-free payload |
 | `crates/stt` | Transcription server registry + LocalAgreement-2 synthesized deltas (ported from TS) |
 | `crates/server` | axum binary `whispera-server` |
+| `crates/dev-idp` | **dev/test only**: `whispera-dev-idp`, a loopback OIDC provider for local sign-in |
 
 ## Self-hosting
 
@@ -176,6 +177,7 @@ All bodies are JSON. Errors use one envelope:
 | `GET /v1/devices` | account | — | `200 {"devices":[device…]}` (revoked ones included, with `revoked_at`) |
 | `DELETE /v1/devices/{id}` | account | — | `204`; `404` if not an active device of this account. Drops its mail and push token, ends its streams. |
 | `GET /v1/device/peers` | device | — | `200 {"devices":[…]}` — the caller's account devices |
+| `PUT /v1/device/apns` | device | `{"apns":{"token":"<64-200 hex>","env":"sandbox"\|"production"}}` or `{"apns":null}` to clear | `200` the caller's device; `400` bad token/env or missing `apns` key |
 | `POST /v1/relay/send` | device | `{"to":"dev_…","ciphertext":"<base64>","ttl_s"?}` | `201 {"seq","expires_at"}`; `404` unknown/revoked/other-account recipient, `413` too large, `429 mailbox_full` |
 | `GET /v1/relay/messages?after=N&limit=L&wait=S` | device | — | `200 {"messages":[{"seq","from","ciphertext","created_at","expires_at"}]}`; with `wait`, long-polls up to S s (max 30) |
 | `POST /v1/relay/ack` | device | `{"up_to_seq":N}` | `200 {"deleted":n}` |
@@ -212,6 +214,59 @@ WHISPERA_TEST_POSTGRES_URL=postgres://postgres:test@localhost:5432/postgres \
   cargo test -p whispera-store --features postgres
 ```
 
+### Local development with accounts
+
+`whispera-dev-idp` is a tiny OpenID Connect provider for development and tests
+**only**: no passwords (anyone who can reach it signs in as any configured user),
+and it refuses to bind anything but loopback. It serves discovery, an ES256
+JWKS, `/authorize` (authorization code + PKCE S256 + `state` required; a page with
+one button per user, or `login_hint=<user>` to approve at once) and `/token`
+(`authorization_code`, `refresh_token`). Tokens: `iss` = its base URL, `aud` =
+client id (`whispera`), `sub` = the user name, 1 h lifetime. Redirect URIs are
+allow-listed (default `whispera://auth/callback`, `whispera-mac://auth/callback`).
+
+```sh
+cargo build -p whispera-server -p whispera-dev-idp
+
+# 1. provider on http://127.0.0.1:18081, users alice + bob
+target/debug/whispera-dev-idp serve            # --users a,b --redirect-uris … --help
+
+# 2. server in OIDC mode against it
+WHISPERA_OIDC_ISSUER=http://127.0.0.1:18081 WHISPERA_OIDC_AUDIENCES=whispera \
+WHISPERA_LISTEN=127.0.0.1:8080 WHISPERA_DATABASE_URL=sqlite://dev.db \
+  target/debug/whispera-server
+
+# 3. a token for curl or a soft client (same key file as `serve`)
+TOKEN=$(target/debug/whispera-dev-idp mint alice)
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/v1/devices
+```
+
+The same server settings as a `WHISPERA_CONFIG` file:
+
+```toml
+listen = "127.0.0.1:8080"
+database_url = "sqlite://dev.db"
+
+[auth]
+mode = "oidc"
+issuer = "http://127.0.0.1:18081"
+audiences = ["whispera"]
+```
+
+Apps point their custom-issuer setting at `http://127.0.0.1:18081` with client id
+`whispera`. `alice` and `bob` are separate accounts. The signing key lives in
+`$TMPDIR/whispera-dev-idp/es256.pem` (`--key-file` to move it,
+`--ephemeral-key` for a throwaway one); `mint` must use the same file as the
+running `serve`.
+
+Without an identity provider, use static-token mode instead:
+
+```sh
+target/debug/whispera-server gen-token alice   # prints the token + `alice:<sha256>`
+WHISPERA_STATIC_TOKENS=alice:<sha256>,bob:<sha256> WHISPERA_LISTEN=127.0.0.1:8080 \
+  WHISPERA_DATABASE_URL=sqlite://dev.db target/debug/whispera-server
+```
+
 The integration tests (`crates/server/tests/integration.rs`) run the real
 router on a temporary SQLite file, including OIDC with a locally generated JWKS
-(no network).
+and OIDC mode against `whispera-dev-idp` over loopback HTTP.

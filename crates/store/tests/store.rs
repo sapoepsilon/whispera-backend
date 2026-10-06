@@ -127,6 +127,26 @@ async fn devices_and_revoke_on(s: Store) {
         .unwrap()
         .apns_token
         .is_none());
+    // set_apns: set, clear, refused for revoked/unknown devices.
+    assert!(s
+        .set_apns("dev_b", Some(("ef01", "production")))
+        .await
+        .unwrap());
+    let b = s.get_device("dev_b").await.unwrap().unwrap();
+    assert_eq!(b.apns_token.as_deref(), Some("ef01"));
+    assert_eq!(b.apns_env.as_deref(), Some("production"));
+    assert!(s.set_apns("dev_b", None).await.unwrap());
+    let b = s.get_device("dev_b").await.unwrap().unwrap();
+    assert_eq!((b.apns_token, b.apns_env), (None, None));
+    assert!(!s
+        .set_apns("dev_a", Some(("ef01", "sandbox")))
+        .await
+        .unwrap());
+    assert!(!s.set_apns("dev_zz", None).await.unwrap());
+    assert_eq!(
+        s.get_device("dev_a").await.unwrap().unwrap().apns_token,
+        None
+    );
 }
 
 #[tokio::test]

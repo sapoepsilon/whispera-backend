@@ -412,6 +412,27 @@ async fn notify_is_content_free_and_cleans_dead_tokens() {
     assert_eq!(s, StatusCode::NOT_FOUND);
 }
 
+fn ids(v: &Value) -> Vec<String> {
+    let mut ids: Vec<String> = v["devices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["device_id"].as_str().unwrap().to_string())
+        .collect();
+    ids.sort();
+    ids
+}
+
+fn sorted(ids: &[&str]) -> Vec<String> {
+    let mut v: Vec<String> = ids.iter().map(|s| s.to_string()).collect();
+    v.sort();
+    v
+}
+
+/// Account pairing isolation: two accounts, A with a Mac and an iPhone, B
+/// with one device. Each account only ever sees its own devices; B can't
+/// relay to, notify or revoke A's devices; revoking an A device keeps it in
+/// A's lists as revoked and kills its WL1 access.
 #[tokio::test]
 async fn other_account_is_isolated() {
     let other = "wst_other-account-token";
@@ -428,25 +449,259 @@ async fn other_account_is_isolated() {
     .unwrap();
     let app = app_with(Arc::new(auth), Settings::default()).await;
     let a = register(&app, TOKEN, "Mac", json!({})).await;
+    let a2 = register(
+        &app,
+        TOKEN,
+        "iPhone",
+        json!({"platform": "ios", "apns": {"token": APNS_B, "env": "sandbox"}}),
+    )
+    .await;
     let x = register(&app, other, "Theirs", json!({})).await;
+
+    // A's devices see each other, via the account list and WL1 peers.
+    let want_a = sorted(&[&a.id, &a2.id]);
+    let (_, v) = call(&app, bearer("GET", "/v1/devices", TOKEN, None)).await;
+    assert_eq!(ids(&v), want_a);
+    for d in [&a, &a2] {
+        let (s, v) = call(&app, d.req("GET", "/v1/device/peers", None)).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(ids(&v), want_a);
+    }
+    // B sees only its own device.
     let (_, v) = call(&app, bearer("GET", "/v1/devices", other, None)).await;
-    assert_eq!(v["devices"].as_array().unwrap().len(), 1);
+    assert_eq!(ids(&v), sorted(&[&x.id]));
+    let (_, v) = call(&app, x.req("GET", "/v1/device/peers", None)).await;
+    assert_eq!(ids(&v), sorted(&[&x.id]));
+
+    // B can't relay to, notify or revoke A's devices.
+    for target in [&a.id, &a2.id] {
+        let (s, _) = call(
+            &app,
+            x.req(
+                "POST",
+                "/v1/relay/send",
+                Some(json!({"to": target, "ciphertext": "AAEC"})),
+            ),
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+        let (s, _) = call(
+            &app,
+            x.req("POST", "/v1/notify", Some(json!({"device_id": target}))),
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+        let (s, _) = call(
+            &app,
+            bearer("DELETE", &format!("/v1/devices/{target}"), other, None),
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+    }
+    assert!(app.pusher.calls.lock().unwrap().is_empty(), "no push to A");
+    assert!(app
+        .store
+        .mailbox_fetch(&a.id, 0, now(), 10)
+        .await
+        .unwrap()
+        .is_empty());
+    // And A can't reach B either.
     let (s, _) = call(
         &app,
-        x.req(
+        a.req(
             "POST",
             "/v1/relay/send",
-            Some(json!({"to": a.id, "ciphertext": "AAEC"})),
+            Some(json!({"to": x.id, "ciphertext": "AAEC"})),
         ),
     )
     .await;
     assert_eq!(s, StatusCode::NOT_FOUND);
+
+    // Revoke A's iPhone: it stays in A's peers marked revoked, and its WL1 calls fail.
     let (s, _) = call(
         &app,
-        bearer("DELETE", &format!("/v1/devices/{}", a.id), other, None),
+        bearer("DELETE", &format!("/v1/devices/{}", a2.id), TOKEN, None),
     )
     .await;
-    assert_eq!(s, StatusCode::NOT_FOUND);
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    let (_, v) = call(&app, a.req("GET", "/v1/device/peers", None)).await;
+    assert_eq!(ids(&v), want_a);
+    for d in v["devices"].as_array().unwrap() {
+        let revoked = d["device_id"] == a2.id.as_str();
+        assert_eq!(d["revoked_at"].is_i64(), revoked, "{d}");
+        if revoked {
+            assert_eq!(d["apns_token_suffix"], Value::Null);
+        }
+    }
+    for req in [
+        a2.req("GET", "/v1/device/peers", None),
+        a2.req(
+            "PUT",
+            "/v1/device/apns",
+            Some(json!({"apns": {"token": APNS_B, "env": "sandbox"}})),
+        ),
+    ] {
+        let (s, v) = call(&app, req).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+        assert_eq!(v["error"]["code"], "auth_revoked");
+    }
+    // B's view is unchanged.
+    let (_, v) = call(&app, x.req("GET", "/v1/device/peers", None)).await;
+    assert_eq!(ids(&v), sorted(&[&x.id]));
+}
+
+/// `PUT /v1/device/apns`: a device sets, replaces and clears its own APNs token.
+#[tokio::test]
+async fn device_updates_its_apns_registration() {
+    let app = app().await;
+    let mac = register(&app, TOKEN, "Mac", json!({})).await;
+    let phone = register(&app, TOKEN, "iPhone", json!({"platform": "ios"})).await;
+    let upper = APNS_B.to_ascii_uppercase();
+
+    // Set (uppercase hex is normalised to lowercase).
+    let (s, v) = call(
+        &app,
+        phone.req(
+            "PUT",
+            "/v1/device/apns",
+            Some(json!({"apns": {"token": upper, "env": "production"}})),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["device_id"], phone.id.as_str());
+    assert_eq!(v["platform"], "ios");
+    assert_eq!(v["apns_token_suffix"], &APNS_B[APNS_B.len() - 8..]);
+    assert_eq!(v["apns_env"], "production");
+    assert!(!v.to_string().to_ascii_lowercase().contains(APNS_B));
+    let stored = app.store.get_device(&phone.id).await.unwrap().unwrap();
+    assert_eq!(stored.apns_token.as_deref(), Some(APNS_B));
+    // Peers see the suffix; notify now pushes to the new token.
+    let (_, v) = call(
+        &app,
+        mac.req("POST", "/v1/notify", Some(json!({"device_id": phone.id}))),
+    )
+    .await;
+    assert_eq!(v["push"], "sent");
+    assert_eq!(
+        app.pusher.calls.lock().unwrap().as_slice(),
+        &[(APNS_B.to_string(), ApnsEnv::Production)]
+    );
+
+    // Clear.
+    let (s, v) = call(
+        &app,
+        phone.req("PUT", "/v1/device/apns", Some(json!({"apns": null}))),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["apns_token_suffix"], Value::Null);
+    assert_eq!(v["apns_env"], Value::Null);
+    let (_, v) = call(
+        &app,
+        mac.req("POST", "/v1/notify", Some(json!({"device_id": phone.id}))),
+    )
+    .await;
+    assert_eq!(v["push"], "no_token");
+
+    // Only the caller's own record changes.
+    let (s, v) = call(
+        &app,
+        mac.req(
+            "PUT",
+            "/v1/device/apns",
+            Some(json!({"apns": {"token": APNS_B, "env": "sandbox"}})),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["device_id"], mac.id.as_str());
+    assert!(app
+        .store
+        .get_device(&phone.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .apns_token
+        .is_none());
+}
+
+#[tokio::test]
+async fn apns_update_validation_and_auth() {
+    let app = app().await;
+    let phone = register(
+        &app,
+        TOKEN,
+        "iPhone",
+        json!({"apns": {"token": APNS_B, "env": "sandbox"}}),
+    )
+    .await;
+    let short = "ab".repeat(31);
+    let long = "ab".repeat(101);
+    for body in [
+        json!({"apns": {"token": "nothex", "env": "sandbox"}}),
+        json!({"apns": {"token": short, "env": "sandbox"}}),
+        json!({"apns": {"token": long, "env": "sandbox"}}),
+        json!({"apns": {"token": APNS_B, "env": "staging"}}),
+        json!({"apns": {"token": APNS_B}}),
+        json!({}),
+    ] {
+        let (s, v) = call(&app, phone.req("PUT", "/v1/device/apns", Some(body))).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+        assert_eq!(v["error"]["type"], "invalid_request_error");
+    }
+    // Rejected bodies left the token alone.
+    let stored = app.store.get_device(&phone.id).await.unwrap().unwrap();
+    assert_eq!(stored.apns_token.as_deref(), Some(APNS_B));
+
+    // Unsigned, account-bearer-only and tampered requests are refused.
+    let body = json!({"apns": null});
+    let unsigned = Request::put("/v1/device/apns")
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let (s, v) = call(&app, unsigned).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+    assert_eq!(v["error"]["code"], "auth_missing");
+    let (s, v) = call(&app, bearer("PUT", "/v1/device/apns", TOKEN, Some(body))).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+    assert_eq!(v["error"]["code"], "auth_missing");
+    let signed = phone.req("PUT", "/v1/device/apns", Some(json!({"apns": null})));
+    let (parts, _) = signed.into_parts();
+    let tampered = Request::from_parts(
+        parts,
+        Body::from(json!({"apns": {"token": APNS_B, "env": "production"}}).to_string()),
+    );
+    let (s, v) = call(&app, tampered).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+    assert_eq!(v["error"]["code"], "auth_bad_signature");
+
+    // A revoked device can't set a token.
+    let (s, _) = call(
+        &app,
+        bearer("DELETE", &format!("/v1/devices/{}", phone.id), TOKEN, None),
+    )
+    .await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    let (s, v) = call(
+        &app,
+        phone.req(
+            "PUT",
+            "/v1/device/apns",
+            Some(json!({"apns": {"token": APNS_B, "env": "sandbox"}})),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+    assert_eq!(v["error"]["code"], "auth_revoked");
+    assert!(app
+        .store
+        .get_device(&phone.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .apns_token
+        .is_none());
 }
 
 #[tokio::test]
@@ -626,6 +881,151 @@ async fn oidc_account_auth_with_local_jwks() {
     // The registered device then works with WL1 alone.
     let (s, _) = call(&app, a.req("GET", "/v1/device/peers", None)).await;
     assert_eq!(s, StatusCode::OK);
+}
+
+/// The server in OIDC mode against `whispera-dev-idp` over loopback HTTP,
+/// configured the way the binary is (env → `Config` → discovery + JWKS).
+#[tokio::test]
+async fn oidc_mode_with_dev_idp_over_loopback() {
+    use whispera_dev_idp::{pkce_challenge, spawn, DevIdp, IdpConfig, IdpKey};
+
+    let loopback = "127.0.0.1:0".parse().unwrap();
+    let (idp, _h1) = spawn(loopback, IdpConfig::new(""), IdpKey::generate())
+        .await
+        .unwrap();
+    let (other_idp, _h2) = spawn(loopback, IdpConfig::new(""), IdpKey::generate())
+        .await
+        .unwrap();
+    let issuer = idp.config().issuer.clone();
+    assert!(issuer.starts_with("http://127.0.0.1:"));
+
+    let cfg = whispera_server::Config::load(|k| match k {
+        "WHISPERA_OIDC_ISSUER" => Some(issuer.clone()),
+        "WHISPERA_OIDC_AUDIENCES" => Some("whispera".into()),
+        _ => None,
+    })
+    .unwrap();
+    let auth = whispera_auth::build_from_config(cfg.auth.as_ref().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(auth.kind(), "oidc");
+    let app = app_with(auth, Settings::default()).await;
+
+    // alice signs in through the real authorize + token endpoints (PKCE).
+    let http = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let verifier = "a".repeat(20) + &"Z".repeat(23) + "-._~";
+    let mut authorize = url::Url::parse(&format!("{issuer}/authorize")).unwrap();
+    authorize
+        .query_pairs_mut()
+        .append_pair("response_type", "code")
+        .append_pair("client_id", "whispera")
+        .append_pair("redirect_uri", "whispera-mac://auth/callback")
+        .append_pair("state", "s1")
+        .append_pair("code_challenge", &pkce_challenge(&verifier))
+        .append_pair("code_challenge_method", "S256")
+        .append_pair("scope", "openid offline_access")
+        .append_pair("login_hint", "alice");
+    let resp = http.get(authorize).send().await.unwrap();
+    assert_eq!(resp.status(), 302);
+    let loc = url::Url::parse(resp.headers()["location"].to_str().unwrap()).unwrap();
+    assert_eq!(loc.scheme(), "whispera-mac");
+    let code = loc
+        .query_pairs()
+        .find(|(k, _)| k == "code")
+        .unwrap()
+        .1
+        .into_owned();
+    let tokens: Value = http
+        .post(format!("{issuer}/token"))
+        .form(&[
+            ("grant_type", "authorization_code"),
+            ("code", &code),
+            ("redirect_uri", "whispera-mac://auth/callback"),
+            ("client_id", "whispera"),
+            ("code_verifier", &verifier),
+        ])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let alice_id = tokens["id_token"].as_str().unwrap().to_string();
+    let alice_at = tokens["access_token"].as_str().unwrap().to_string();
+
+    // Both of alice's tokens are accepted and name the same account.
+    let mac = register(&app, &alice_id, "Mac", json!({})).await;
+    register(&app, &alice_at, "iPhone", json!({"platform": "ios"})).await;
+    let (s, v) = call(&app, bearer("GET", "/v1/devices", &alice_at, None)).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["devices"].as_array().unwrap().len(), 2);
+
+    // bob (minted, as `whispera-dev-idp mint bob` does) is a different account.
+    let bob = idp.mint_access_token("bob", "openid");
+    let (s, v) = call(&app, bearer("GET", "/v1/devices", &bob, None)).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["devices"], json!([]));
+    let bob_dev = register(&app, &bob, "Bob's Mac", json!({})).await;
+    let (_, v) = call(&app, bob_dev.req("GET", "/v1/device/peers", None)).await;
+    assert_eq!(ids(&v), sorted(&[&bob_dev.id]));
+    let (_, v) = call(&app, mac.req("GET", "/v1/device/peers", None)).await;
+    assert_eq!(v["devices"].as_array().unwrap().len(), 2);
+    let accounts: Vec<String> = account_ids(&app, &[&mac.id, &bob_dev.id]).await;
+    assert_ne!(
+        accounts[0], accounts[1],
+        "alice and bob are different accounts"
+    );
+
+    // Tokens from a second dev-idp instance are refused: its own issuer...
+    for t in [
+        other_idp.mint_access_token("alice", "openid"),
+        other_idp.mint_id_token("alice", None),
+    ] {
+        let (s, v) = call(&app, bearer("GET", "/v1/devices", &t, None)).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+        assert_eq!(v["error"]["code"], "auth_account_invalid");
+    }
+    // ...and an impostor claiming the first issuer but holding a different key.
+    let impostor = DevIdp::new(IdpConfig::new(issuer.clone()), IdpKey::generate());
+    let (s, v) = call(
+        &app,
+        bearer(
+            "GET",
+            "/v1/devices",
+            &impostor.mint_access_token("alice", "openid"),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+    assert_eq!(v["error"]["code"], "auth_account_invalid");
+    // A token for another client id of the same provider is refused too.
+    let mut cfg = IdpConfig::new(issuer.clone());
+    cfg.client_id = "some-other-app".into();
+    let other_client = DevIdp::new(cfg, idp.key().clone());
+    let (s, _) = call(
+        &app,
+        bearer(
+            "GET",
+            "/v1/devices",
+            &other_client.mint_access_token("alice", "openid"),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+}
+
+/// Account ids owning the given devices.
+async fn account_ids(app: &App, devices: &[&str]) -> Vec<String> {
+    let mut out = Vec::new();
+    for d in devices {
+        out.push(app.store.get_device(d).await.unwrap().unwrap().account_id);
+    }
+    out
 }
 
 async fn next(body: &mut Body) -> Option<Result<axum::body::Bytes, axum::Error>> {

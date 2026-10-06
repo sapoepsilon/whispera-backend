@@ -2491,6 +2491,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "whispera-dev-idp"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "http-body-util",
+ "jsonwebtoken",
+ "p256",
+ "rand 0.8.8",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
 name = "whispera-proto"
 version = "0.1.0"
 dependencies = [
@@ -2529,6 +2551,7 @@ dependencies = [
  "jsonwebtoken",
  "p256",
  "rand 0.8.8",
+ "reqwest",
  "serde",
  "serde_json",
  "tempfile",
@@ -2539,8 +2562,10 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "url",
  "whispera-apns",
  "whispera-auth",
+ "whispera-dev-idp",
  "whispera-proto",
  "whispera-relay",
  "whispera-store",

@@ -80,6 +80,14 @@ pub struct RegisterDeviceRequest {
     pub apns: Option<ApnsRegistration>,
 }
 
+/// `PUT /v1/device/apns` body (WL1-signed): set or clear the calling device's
+/// APNs registration. The `apns` key is required; `null` clears it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateApnsRequest {
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub apns: Option<ApnsRegistration>,
+}
+
 /// Last 8 chars of an APNs token (the only part ever shown publicly).
 pub fn apns_token_suffix(token: &str) -> String {
     let n = token.chars().count();
@@ -198,6 +206,23 @@ mod tests {
         assert_eq!(r.apns.as_ref().unwrap().env, ApnsEnv::Sandbox);
         assert!(serde_json::from_value::<RegisterDeviceRequest>(
             json!({"name":"x","platform":"windows","link_pubkey":"AA=="})
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn update_apns_shapes() {
+        let set: UpdateApnsRequest =
+            serde_json::from_value(json!({"apns": {"token": "abcd", "env": "production"}}))
+                .unwrap();
+        assert_eq!(set.apns.unwrap().env, ApnsEnv::Production);
+        let clear: UpdateApnsRequest = serde_json::from_value(json!({"apns": null})).unwrap();
+        assert_eq!(clear.apns, None);
+        assert_eq!(serde_json::to_value(&clear).unwrap(), json!({"apns": null}));
+        // The key is required: `{}` is not a silent clear.
+        assert!(serde_json::from_value::<UpdateApnsRequest>(json!({})).is_err());
+        assert!(serde_json::from_value::<UpdateApnsRequest>(
+            json!({"apns": {"token": "abcd", "env": "dev"}})
         )
         .is_err());
     }

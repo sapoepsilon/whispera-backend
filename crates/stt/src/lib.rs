@@ -1,0 +1,1 @@
+//! whispera-stt (stub)

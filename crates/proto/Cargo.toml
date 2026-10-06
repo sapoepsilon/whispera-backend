@@ -1,0 +1,20 @@
+[package]
+name = "whispera-proto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Wire types, key encodings, WL1 request signing and error envelope for the Whispera backend (no I/O)."
+
+[lib]
+name = "whispera_proto"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+p256.workspace = true
+sha2.workspace = true
+base64.workspace = true
+hex.workspace = true
+rand.workspace = true

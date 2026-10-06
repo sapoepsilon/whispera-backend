@@ -1,0 +1,12 @@
+[package]
+name = "whispera-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "whispera-server"
+path = "src/main.rs"
+
+[dependencies]
